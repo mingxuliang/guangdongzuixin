@@ -3,7 +3,7 @@
 ## 架构
 
 - **前端**：Vite 构建产物在 `out/`。
-- **后端**：`server/index.mjs`（Express），提供 `/api/knowledge-extraction/*`，会话与上传落在 `server/data/`、`server/uploads/`。
+- **后端**：`server/index.mjs`（Express），提供 `/api/knowledge-extraction/*`，会话落在 `server/data/`。若配置 **Sealos 对象存储**（`OSS_*` 环境变量），上传文件写入 **存储桶**；否则暂存 `server/uploads/`。
 - **Dify**：导入 `dify/ke-01-source-anchor.dsl.yml`，配置模型后发布；将 **Workflow API Key** 写入环境变量 `KE_ANCHOR_API_KEY`，`DIFY_BASE_URL` 指向可访问的 Dify `/v1` 根路径。
 
 ## 本地开发（Windows / Mac）
@@ -17,7 +17,7 @@
 ## Devbox 上部署（单进程托管静态站 + API）
 
 1. 在 Devbox 中拉取代码，执行 `npm install`。
-2. 在平台环境变量中配置：`KE_ANCHOR_API_KEY`、`DIFY_BASE_URL`、`SERVER_PORT`（与平台映射端口一致）。
+2. 在平台环境变量中配置：`KE_ANCHOR_API_KEY`、`DIFY_BASE_URL`、`SERVER_PORT`（与平台映射端口一致）。若使用对象存储，增加 `OSS_ENDPOINT`、`OSS_ACCESS_KEY_ID`、`OSS_SECRET_ACCESS_KEY`、`OSS_BUCKET`（**Secret 勿提交 Git**）。与 Sealos 同集群时 `OSS_ENDPOINT` 可用控制台 **Internal** 内网地址。
 3. 构建并启动：
 
 ```bash
@@ -31,5 +31,5 @@ npm run start:app
 
 ## 生产建议
 
-- 会话与上传目录应换为 **托管数据库 + 对象存储**；当前实现为落地文件，便于联调。
+- 会话表建议换为 **托管数据库**；上传已支持 **对象存储**，未配置 `OSS_*` 时仍用本地 `server/uploads/`。
 - `KE_ANCHOR_API_KEY` 仅放服务端，勿写入前端构建环境。
