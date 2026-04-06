@@ -19,6 +19,7 @@ type LocalFileRow = {
   type: 'ppt' | 'word' | 'audio' | 'pdf' | 'other';
   serverAssetId?: string;
   uploading?: boolean;
+  audioPending?: boolean; // 音频已上传但待转写
   error?: string;
 };
 
@@ -154,9 +155,8 @@ const SourceAnchorStep = ({ onNext }: SourceAnchorStepProps) => {
 
   const uploadToSession = useCallback(
     async (file: File, kind: string) => {
-      if (!sessionId) return;
-      const asset = await keUploadAsset(sessionId, file, kind);
-      return asset.id;
+      if (!sessionId) return null;
+      return keUploadAsset(sessionId, file, kind);
     },
     [sessionId]
   );
@@ -199,19 +199,20 @@ const SourceAnchorStep = ({ onNext }: SourceAnchorStepProps) => {
       setter(prev => [...prev, row]);
       if (useApi && sessionId) {
         try {
-          const sid = await uploadToSession(file, kind);
+          const result = await uploadToSession(file, kind);
+          if (!result) throw new Error('上传响应为空');
+          const isAudioPending = Boolean(result.audio_pending);
           setter(prev =>
-            prev.map(r => (r.id === id ? { ...r, serverAssetId: sid, uploading: false, error: undefined } : r))
+            prev.map(r => (r.id === id
+              ? { ...r, serverAssetId: result.id, uploading: false, audioPending: isAudioPending, error: undefined }
+              : r
+            ))
           );
         } catch (err) {
           setter(prev =>
             prev.map(r =>
               r.id === id
-                ? {
-                    ...r,
-                    uploading: false,
-                    error: err instanceof Error ? err.message : String(err),
-                  }
+                ? { ...r, uploading: false, error: err instanceof Error ? err.message : String(err) }
                 : r
             )
           );
@@ -276,7 +277,8 @@ const SourceAnchorStep = ({ onNext }: SourceAnchorStepProps) => {
         setSubmitError('存在上传失败的文件，请删除后重新上传');
         return;
       }
-      if (!manualFiles.every(f => f.serverAssetId)) {
+      // 音频文件会标记为 audioPending，视为上传成功；只有非音频文件需要 serverAssetId
+      if (!manualFiles.every(f => f.serverAssetId || f.audioPending)) {
         setSubmitError('请等待全部文件上传成功');
         return;
       }
@@ -643,14 +645,22 @@ const SourceAnchorStep = ({ onNext }: SourceAnchorStepProps) => {
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex flex-col items-end gap-1">
+              {courseAudioFiles.some(f => f.audioPending) && !submitting && (
+                <p className="text-[10px] text-indigo-500 flex items-center gap-1">
+                  <i className="ri-time-line" />
+                  音频将在点击下方按钮后自动转写（可能需要额外 1-3 分钟）
+                </p>
+              )}
               <button
                 type="button"
                 disabled={nextDisabled}
                 onClick={() => void handleSubmitNext()}
                 className="flex items-center gap-2 px-6 py-2.5 bg-blue-500 text-white text-sm font-semibold rounded-xl hover:bg-blue-600 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {submitting ? '锚定分析中…' : '开始分层筛选'}
+                {submitting
+                  ? courseAudioFiles.some(f => f.audioPending) ? '音频转写 + 锚定分析中…' : '锚定分析中…'
+                  : '开始分层筛选'}
                 <i className="ri-arrow-right-line" />
               </button>
             </div>
@@ -714,7 +724,7 @@ const SourceAnchorStep = ({ onNext }: SourceAnchorStepProps) => {
                     {manualFiles.map(f => {
                       const cfg = fileTypeConfig[f.type];
                       return (
-                        <div key={f.id} className={`flex items-center gap-2.5 p-2.5 rounded-xl border border-gray-100 ${cfg.bg}`}>
+                        <div key={f.id} className={`flex items-center gap-2.5 p-2.5 rounded-xl border ${f.audioPending ? 'border-indigo-100 bg-indigo-50/60' : `border-gray-100 ${cfg.bg}`}`}>
                           <div className="w-7 h-7 flex items-center justify-center bg-white rounded-lg flex-shrink-0">
                             <i className={`${cfg.icon} ${cfg.color} text-sm`} />
                           </div>
@@ -722,10 +732,15 @@ const SourceAnchorStep = ({ onNext }: SourceAnchorStepProps) => {
                             <p className="text-xs font-medium text-gray-700 truncate">{f.name}</p>
                             <p className="text-[10px] text-gray-400">
                               {cfg.label} · {f.size}
-                              {f.uploading ? ' · 上传中' : ''}
+                              {f.uploading ? ' · 上传中…' : ''}
+                              {f.audioPending ? ' · 待转写（分析时处理）' : ''}
                               {f.error ? ` · ${f.error}` : ''}
+                              {!f.uploading && !f.audioPending && !f.error && f.serverAssetId ? ' · 解析完成 ✓' : ''}
                             </p>
                           </div>
+                          {f.audioPending && (
+                            <span className="text-[9px] text-indigo-600 bg-indigo-100 px-1.5 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">待转写</span>
+                          )}
                           <button
                             type="button"
                             onClick={() => removeManualFile(f.id)}
@@ -815,14 +830,22 @@ const SourceAnchorStep = ({ onNext }: SourceAnchorStepProps) => {
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex flex-col items-end gap-1">
+              {manualFiles.some(f => f.audioPending) && !submitting && (
+                <p className="text-[10px] text-indigo-500 flex items-center gap-1">
+                  <i className="ri-time-line" />
+                  {manualFiles.filter(f => f.audioPending).length} 个音频文件将在点击下方按钮后自动转写（可能需要额外 1-3 分钟）
+                </p>
+              )}
               <button
                 type="button"
                 disabled={nextDisabled}
                 onClick={() => void handleSubmitNext()}
                 className="flex items-center gap-2 px-6 py-2.5 bg-blue-500 text-white text-sm font-semibold rounded-xl hover:bg-blue-600 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {submitting ? '锚定分析中…' : '开始分层筛选'}
+                {submitting
+                  ? manualFiles.some(f => f.audioPending) ? '音频转写 + 锚定分析中…' : '锚定分析中…'
+                  : '开始分层筛选'}
                 <i className="ri-arrow-right-line" />
               </button>
             </div>

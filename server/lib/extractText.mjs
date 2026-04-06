@@ -7,6 +7,16 @@ function truncate(text) {
   return t.length > MAX_CHARS ? t.slice(0, MAX_CHARS) + '\n…[内容已截断，超出 12 万字上限]' : t;
 }
 
+// ── 音频文件扩展名判断 ────────────────────────────────────────────────────────
+export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'wma', 'mp4', 'webm'];
+
+export function isAudioExt(ext) {
+  return AUDIO_EXTENSIONS.includes((ext || '').toLowerCase());
+}
+
+/** 上传时写入资产的占位文本，anchor/run 时会替换为真实转写内容 */
+export const AUDIO_PENDING = '[AUDIO_PENDING]';
+
 // ── Word .docx ──────────────────────────────────────────────────────────────
 async function extractDocx(filePath, originalName) {
   try {
@@ -37,7 +47,6 @@ async function extractOffice(filePath, originalName) {
 // ── PDF ─────────────────────────────────────────────────────────────────────
 async function extractPdf(filePath, originalName) {
   try {
-    // 使用 lib 内部路径避免 pdf-parse 在 ESM 下触发测试文件读取的已知问题
     const { createRequire } = await import('node:module');
     const require = createRequire(import.meta.url);
     const pdfParse = require('pdf-parse/lib/pdf-parse.js');
@@ -51,9 +60,8 @@ async function extractPdf(filePath, originalName) {
   }
 }
 
-// ── 音频：调用 Dify audio-to-text 或 OpenAI Whisper ────────────────────────
-async function transcribeAudio(filePath, originalName) {
-  // 优先使用专用音频转写 key，回退使用 KE_ANCHOR_API_KEY
+// ── 音频：调用 Dify audio-to-text（可在上传时或 anchor/run 时调用）────────────
+export async function transcribeAudio(filePath, originalName) {
   const apiKey = (
     process.env.KE_AUDIO_TO_TEXT_API_KEY ||
     process.env.KE_ANCHOR_API_KEY ||
@@ -63,8 +71,7 @@ async function transcribeAudio(filePath, originalName) {
   if (!apiKey) {
     return [
       `[音频文件已上传: ${originalName}]`,
-      `提示：配置 KE_AUDIO_TO_TEXT_API_KEY（Dify 应用 API Key，需开启语音转文字）后可自动转写。`,
-      `当前为占位描述，请在萃取目标中手动补充该音频的核心内容摘要。`,
+      `提示：配置 KE_AUDIO_TO_TEXT_API_KEY 后可自动转写。当前为占位描述，请在萃取目标中手动补充该音频的核心内容摘要。`,
     ].join('\n');
   }
 
@@ -74,7 +81,6 @@ async function transcribeAudio(filePath, originalName) {
 
   try {
     const buf = fs.readFileSync(filePath);
-    // Node 18+ 全局 FormData / Blob / fetch
     const blob = new Blob([buf]);
     const form = new FormData();
     form.append('file', blob, originalName);
@@ -103,9 +109,12 @@ async function transcribeAudio(filePath, originalName) {
   }
 }
 
-// ── 公共入口（异步）────────────────────────────────────────────────────────
+// ── 公共入口（对外导出，音频文件直接返回 AUDIO_PENDING 占位）────────────────
 export async function extractTextFromFile(filePath, originalName) {
   const ext = (originalName.split('.').pop() || '').toLowerCase();
+
+  // 音频文件：上传时不做耗时转写，返回占位标记，由 anchor/run 统一批量处理
+  if (isAudioExt(ext)) return AUDIO_PENDING;
 
   // 纯文本类：直接读 UTF-8
   if (['txt', 'md', 'csv', 'json', 'html', 'htm', 'xml'].includes(ext)) {
@@ -126,11 +135,6 @@ export async function extractTextFromFile(filePath, originalName) {
 
   // PDF
   if (ext === 'pdf') return extractPdf(filePath, originalName);
-
-  // 音频
-  if (['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'wma', 'mp4', 'webm'].includes(ext)) {
-    return transcribeAudio(filePath, originalName);
-  }
 
   return `[文件已上传，暂不支持解析该格式: ${originalName} (.${ext})]`;
 }
@@ -155,8 +159,11 @@ export function mergeMaterialLines(session) {
     lines.push('--- 已上传素材 ---');
     for (const a of session.assets) {
       const charCount = a.extracted_text?.length || 0;
-      lines.push(`- [${a.kind}] ${a.original_name}（解析字数: ${charCount}）`);
-      if (a.extracted_text) lines.push(a.extracted_text);
+      const isPending = a.extracted_text === AUDIO_PENDING;
+      lines.push(
+        `- [${a.kind}] ${a.original_name}（${isPending ? '音频占位，转写未完成' : `解析字数: ${charCount}`}）`
+      );
+      if (a.extracted_text && !isPending) lines.push(a.extracted_text);
     }
   } else if (session.mode === 'course' && session.course_title) {
     lines.push('--- 课程模式（无上传文件时由课程元信息占位）---');

@@ -61,7 +61,11 @@ export async function keGetSession(id: string): Promise<KeSession> {
   return r.json() as Promise<KeSession>;
 }
 
-export async function keUploadAsset(sessionId: string, file: File, kind: string): Promise<{ id: string }> {
+export async function keUploadAsset(
+  sessionId: string,
+  file: File,
+  kind: string,
+): Promise<{ id: string; audio_pending?: boolean; extracted_text?: string }> {
   const fd = new FormData();
   fd.append('file', file);
   fd.append('kind', kind);
@@ -70,7 +74,7 @@ export async function keUploadAsset(sessionId: string, file: File, kind: string)
     body: fd,
   });
   if (!r.ok) throw new Error(await r.text());
-  return r.json() as Promise<{ id: string }>;
+  return r.json() as Promise<{ id: string; audio_pending?: boolean; extracted_text?: string }>;
 }
 
 export type KnowledgeItem = {

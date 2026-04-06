@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 
 import { runKeAnchorWorkflow, runKeFilterWorkflow, runKeRefineWorkflow, runKeReextractWorkflow } from './lib/difyClient.mjs';
-import { extractTextFromFile, mergeMaterialLines } from './lib/extractText.mjs';
+import { extractTextFromFile, mergeMaterialLines, AUDIO_PENDING, isAudioExt, transcribeAudio } from './lib/extractText.mjs';
 import { isOssConfigured, putLocalFileToOss } from './lib/ossUpload.mjs';
 import { createSessionRecord, loadSession, saveSession } from './lib/store.mjs';
 
@@ -90,10 +90,16 @@ app.post('/api/knowledge-extraction/sessions/:id/assets', upload.single('file'),
   if (!req.file) return res.status(400).json({ error: 'file_required' });
 
   const kind = (req.body?.kind || 'manual_upload').toString();
-  const extracted_text = await extractTextFromFile(req.file.path, req.file.originalname);
-  const assetId = randomUUID();
+  const ext = (req.file.originalname.split('.').pop() || '').toLowerCase();
+  const isAudio = isAudioExt(ext);
 
-  /** OSS 对象键：knowledge-extraction/{sessionId}/{assetId}-{safeName} */
+  // 音频文件：延迟转写（在 anchor/run 时统一处理），上传立即响应
+  // 非音频文件：立即提取文本（PDF/Word/PPT 通常只需几秒）
+  const extracted_text = isAudio
+    ? AUDIO_PENDING
+    : await extractTextFromFile(req.file.path, req.file.originalname);
+
+  const assetId = randomUUID();
   const safeName = req.file.originalname.replace(/[^\w.\-\u4e00-\u9fa5]/g, '_');
   const ossKey = `knowledge-extraction/${req.params.id}/${assetId}-${safeName}`;
 
@@ -103,7 +109,9 @@ app.post('/api/knowledge-extraction/sessions/:id/assets', upload.single('file'),
   let oss_key;
 
   try {
-    if (isOssConfigured()) {
+    // 音频文件始终保留本地副本（anchor/run 阶段需要读取本地文件做转写）
+    // 非音频文件按正常逻辑上传 OSS
+    if (isOssConfigured() && !isAudio) {
       const up = await putLocalFileToOss({
         localPath: req.file.path,
         objectKey: ossKey,
@@ -113,16 +121,11 @@ app.post('/api/knowledge-extraction/sessions/:id/assets', upload.single('file'),
         storage = 'oss';
         oss_bucket = up.bucket;
         oss_key = up.key;
-        try {
-          fs.unlinkSync(req.file.path);
-        } catch {
-          /* ignore */
-        }
+        try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
         localPath = undefined;
       }
     }
   } catch (e) {
-    // OSS 失败时保留本地文件，便于重试
     return res.status(502).json({
       error: `object_storage_upload_failed: ${String(e?.message || e)}`,
     });
@@ -139,6 +142,8 @@ app.post('/api/knowledge-extraction/sessions/:id/assets', upload.single('file'),
     size: req.file.size,
     mime: req.file.mimetype,
     extracted_text,
+    // 音频文件标记为待转写，便于前端显示进度提示
+    audio_pending: isAudio ? true : undefined,
   };
   s.assets = s.assets || [];
   s.assets.push(asset);
@@ -163,6 +168,32 @@ app.post('/api/knowledge-extraction/sessions/:id/anchor/run', async (req, res) =
   saveSession(s);
 
   try {
+    // ── 批量转写待处理音频文件（上传时跳过，在此统一处理）────────────────────
+    let audioTranscribed = false;
+    for (const asset of (s.assets || [])) {
+      if (asset.extracted_text !== AUDIO_PENDING) continue;
+      if (!asset.path) {
+        // 音频文件没有本地路径（OSS 情况）
+        asset.extracted_text = `[音频文件已上传至云存储，本地副本不可用，无法自动转写: ${asset.original_name}]`;
+        asset.audio_pending = false;
+        audioTranscribed = true;
+        continue;
+      }
+      const absPath = path.join(ROOT, asset.path);
+      if (!fs.existsSync(absPath)) {
+        asset.extracted_text = `[音频本地文件已被移除，无法转写: ${asset.original_name}]`;
+        asset.audio_pending = false;
+        audioTranscribed = true;
+        continue;
+      }
+      console.log(`[anchor/run] 开始转写音频: ${asset.original_name}`);
+      asset.extracted_text = await transcribeAudio(absPath, asset.original_name);
+      asset.audio_pending = false;
+      audioTranscribed = true;
+      console.log(`[anchor/run] 转写完成: ${asset.original_name} (${asset.extracted_text.length} 字)`);
+    }
+    if (audioTranscribed) saveSession(s); // 保存转写结果
+
     const material_bundle_text = mergeMaterialLines(s);
     const inputs = {
       mode: s.mode,
