@@ -139,22 +139,45 @@ export async function runKeFilterWorkflow(inputs) {
 
   let knowledge_items;
   try {
+    // 1. 先尝试去掉 markdown 围栏后直接解析
     const cleaned = stripJsonFence(text);
-    knowledge_items = JSON.parse(cleaned);
-    if (!Array.isArray(knowledge_items)) throw new Error('非数组');
+    const parsed = JSON.parse(cleaned);
+    knowledge_items = Array.isArray(parsed) ? parsed : (parsed?.items ?? [parsed]);
   } catch {
-    knowledge_items = [{
-      id: 'k_raw',
-      type: 'explicit',
-      category: '原始输出',
-      title: '解析失败，原始内容',
-      content: text.slice(0, 500),
-      source: 'Dify',
-      priority: 'medium',
-      reusable: false,
-      selected: false,
-    }];
+    try {
+      // 2. 用正则从文本中提取第一个 JSON 数组片段
+      const match = text.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error('未找到 JSON 数组');
+      const parsed = JSON.parse(match[0]);
+      knowledge_items = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      // 3. 兜底：把原始文本作为提示条目返回，让用户知道出了什么问题
+      knowledge_items = [{
+        id: 'k_raw',
+        type: 'explicit',
+        category: '解析提示',
+        title: 'AI返回内容解析失败，请查看原始内容',
+        content: text.slice(0, 800),
+        source: 'Dify原始输出',
+        priority: 'low',
+        reusable: false,
+        selected: false,
+      }];
+    }
   }
+
+  // 确保每个条目都有必要字段
+  knowledge_items = knowledge_items.map((item, i) => ({
+    id: item.id ?? `k${i + 1}`,
+    type: item.type ?? 'explicit',
+    category: item.category ?? '未分类',
+    title: item.title ?? `知识条目${i + 1}`,
+    content: item.content ?? '',
+    source: item.source ?? 'Dify',
+    priority: item.priority ?? 'medium',
+    reusable: item.reusable !== false,
+    selected: item.selected !== false && item.priority !== 'low',
+  }));
 
   return { mock: false, knowledge_items };
 }
