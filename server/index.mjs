@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 
-import { runKeAnchorWorkflow } from './lib/difyClient.mjs';
+import { runKeAnchorWorkflow, runKeFilterWorkflow } from './lib/difyClient.mjs';
 import { extractTextFromFile, mergeMaterialLines } from './lib/extractText.mjs';
 import { isOssConfigured, putLocalFileToOss } from './lib/ossUpload.mjs';
 import { createSessionRecord, loadSession, saveSession } from './lib/store.mjs';
@@ -186,6 +186,43 @@ app.post('/api/knowledge-extraction/sessions/:id/anchor/run', async (req, res) =
     s.error_message = String(e?.message || e);
     saveSession(s);
     res.status(500).json({ error: s.error_message, session: s });
+  }
+});
+
+app.post('/api/knowledge-extraction/sessions/:id/filter/run', async (req, res) => {
+  const s = loadSession(req.params.id);
+  if (!s) return res.status(404).json({ error: 'not_found' });
+
+  if (!s.anchor_package) {
+    return res.status(400).json({ error: 'anchor_required: 请先完成源头锚定（Step 1）' });
+  }
+
+  s.filter_status = 'running';
+  s.filter_error = null;
+  saveSession(s);
+
+  try {
+    const material_bundle_text = mergeMaterialLines(s);
+    const inputs = {
+      anchor_package: JSON.stringify(s.anchor_package),
+      extract_goal: s.extract_goal || '',
+      target_audience: s.target_audience || '',
+      material_bundle_text: material_bundle_text.slice(0, 100_000),
+    };
+
+    const result = await runKeFilterWorkflow(inputs);
+    s.filter_items = result.knowledge_items;
+    s.filter_status = 'ready';
+    s.filter_error = result.mock
+      ? 'mock: 未配置 KE_FILTER_API_KEY，返回演示数据'
+      : null;
+    saveSession(s);
+    res.json(s);
+  } catch (e) {
+    s.filter_status = 'failed';
+    s.filter_error = String(e?.message || e);
+    saveSession(s);
+    res.status(500).json({ error: s.filter_error, session: s });
   }
 });
 

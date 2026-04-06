@@ -1,0 +1,198 @@
+# =============================================================================
+# Dify 工作流 DSL · 知识萃取「分层筛选」Step 2（稳定版）
+# -----------------------------------------------------------------------------
+# 输入：anchor_package（Step1 JSON 字符串）+ material_bundle_text + 目标信息
+# 输出：knowledge_items（JSON 数组字符串，含分类/优先级/来源）
+# 注意：version 必须字符串；LLM 节点必须含 context / vision 字段
+# =============================================================================
+
+version: "0.6.0"
+kind: app
+app:
+  name: 知识萃取-分层筛选
+  description: 根据Step1锚定结果对素材进行显性/隐性/实践知识的分类筛选和优先级评估
+  icon_type: emoji
+  icon: '📊'
+  icon_background: '#FEF3C7'
+  mode: workflow
+  use_icon_as_answer_icon: false
+
+dependencies: []
+
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features: {}
+
+  graph:
+    nodes:
+      - id: start
+        type: custom
+        position:
+          x: 80
+          y: 160
+        positionAbsolute:
+          x: 80
+          y: 160
+        width: 242
+        height: 98
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        data:
+          type: start
+          title: 开始
+          desc: ''
+          variables:
+            - variable: anchor_package
+              label: Step1输出的锚定包（JSON字符串）
+              type: paragraph
+              required: false
+              max_length: 8192
+            - variable: extract_goal
+              label: 萃取目标
+              type: paragraph
+              required: false
+              max_length: 8192
+            - variable: target_audience
+              label: 目标受众
+              type: paragraph
+              required: false
+              max_length: 4096
+            - variable: material_bundle_text
+              label: 素材合并文本（大纲/PPT/讲稿/音频转写）
+              type: paragraph
+              required: false
+              max_length: 120000
+
+      - id: llm_filter
+        type: custom
+        position:
+          x: 400
+          y: 160
+        positionAbsolute:
+          x: 400
+          y: 160
+        width: 242
+        height: 98
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        data:
+          type: llm
+          title: 知识分层筛选
+          desc: 识别显性/隐性/实践知识并评估优先级，输出 JSON 数组
+          model:
+            provider: ''
+            name: ''
+            mode: chat
+            completion_params:
+              temperature: 0.3
+              max_tokens: 6000
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+          prompt_template:
+            - role: system
+              edition_type: basic
+              text: |-
+                你是企业知识萃取筛选专家，擅长识别和分类不同类型的知识价值。
+
+                # 知识分类定义
+                - **显性知识(explicit)**：结构化内容、知识点、流程步骤、方法论（通常来自大纲、PPT）
+                - **隐性知识(tacit)**：讲师经验、技巧、避坑指南、判断标准（通常来自讲稿、音频）
+                - **优秀实践(practice)**：成功案例、实操经验、可参考范例
+
+                # 优先级标准
+                - **high**：直接支撑萃取目标、可复用、有实操价值
+                - **medium**：有价值但需加工或场景受限
+                - **low**：偏离目标、过于具体或难以复用
+
+                # 输出要求
+                必须只输出一个合法 JSON 数组（不要 Markdown 代码围栏，不要任何多余文字）：
+                [
+                  {
+                    "id": "唯一ID如k1",
+                    "type": "explicit 或 tacit 或 practice",
+                    "category": "分类标签（知识点/流程步骤/经验技巧/避坑指南/案例/方法论等）",
+                    "title": "简短标题（10-20字）",
+                    "content": "核心内容摘要（50-150字）",
+                    "source": "来源标记（如：PPT第3页/讲稿第2章/音频片段等）",
+                    "priority": "high 或 medium 或 low",
+                    "reusable": true或false,
+                    "selected": true或false
+                  }
+                ]
+
+                要求：
+                - 结合锚定结果的 scope_in 判断哪些内容应纳入
+                - 每种类型(explicit/tacit/practice)至少尝试提取 2-3 条
+                - 总条目数控制在 8-20 条之间
+                - 高优先级条目默认 selected=true，低优先级默认 selected=false
+                - 确保输出可被 JSON.parse 直接解析
+
+            - role: user
+              edition_type: basic
+              text: |-
+                # 源头锚定结果
+                {{#start.anchor_package#}}
+
+                # 萃取目标
+                {{#start.extract_goal#}}
+
+                # 目标受众
+                {{#start.target_audience#}}
+
+                # 素材内容
+                {{#start.material_bundle_text#}}
+
+                请分析上述素材，输出知识条目筛选结果（JSON 数组）：
+
+      - id: end
+        type: custom
+        position:
+          x: 720
+          y: 160
+        positionAbsolute:
+          x: 720
+          y: 160
+        width: 242
+        height: 98
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        data:
+          type: end
+          title: 结束
+          desc: ''
+          outputs:
+            - variable: knowledge_items
+              value_selector:
+                - llm_filter
+                - text
+
+    edges:
+      - id: start-llm_filter
+        type: custom
+        source: start
+        sourceHandle: source
+        target: llm_filter
+        targetHandle: target
+        data:
+          sourceType: start
+          targetType: llm
+          isInIteration: false
+        zIndex: 0
+      - id: llm_filter-end
+        type: custom
+        source: llm_filter
+        sourceHandle: source
+        target: end
+        targetHandle: target
+        data:
+          sourceType: llm
+          targetType: end
+          isInIteration: false
+        zIndex: 0

@@ -73,6 +73,34 @@ export async function keUploadAsset(sessionId: string, file: File, kind: string)
   return r.json() as Promise<{ id: string }>;
 }
 
+export type KnowledgeItem = {
+  id: string;
+  type: 'explicit' | 'tacit' | 'practice';
+  category: string;
+  title: string;
+  content: string;
+  source: string;
+  priority: 'high' | 'medium' | 'low';
+  reusable: boolean;
+  selected: boolean;
+};
+
+export async function keRunFilter(sessionId: string): Promise<KeSession & { filter_items?: KnowledgeItem[] }> {
+  const r = await fetch(url(`/knowledge-extraction/sessions/${sessionId}/filter/run`), {
+    method: 'POST',
+  });
+  const text = await r.text();
+  if (!r.ok) {
+    try {
+      const j = JSON.parse(text) as { error?: string };
+      throw new Error(j.error || text);
+    } catch {
+      throw new Error(text);
+    }
+  }
+  return JSON.parse(text) as KeSession & { filter_items?: KnowledgeItem[] };
+}
+
 export async function keRunAnchor(sessionId: string): Promise<KeSession> {
   const r = await fetch(url(`/knowledge-extraction/sessions/${sessionId}/anchor/run`), {
     method: 'POST',

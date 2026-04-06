@@ -92,6 +92,93 @@ export async function runKeAnchorWorkflow(inputs) {
   return { mock: false, anchor_package };
 }
 
+// ── Step 2：分层筛选 ─────────────────────────────────────────────────────────
+
+export async function runKeFilterWorkflow(inputs) {
+  const apiKey = process.env.KE_FILTER_API_KEY?.trim();
+  if (!apiKey) {
+    return { mock: true, knowledge_items: buildMockFilterItems(inputs) };
+  }
+
+  const user = process.env.KE_ANCHOR_USER?.trim() || 'knowledge-extraction-filter';
+  const url = `${getV1Root()}/workflows/run`;
+  const timeoutMs = Number(process.env.KE_ANCHOR_TIMEOUT_MS || 180000);
+
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal: controller.signal,
+      body: JSON.stringify({ inputs, response_mode: 'blocking', user }),
+    });
+  } finally {
+    clearTimeout(tid);
+  }
+
+  const rawText = await res.text();
+  if (!res.ok) throw new Error(`Dify Filter Workflow ${res.status}: ${rawText.slice(0, 800)}`);
+
+  let json;
+  try { json = JSON.parse(rawText); } catch { throw new Error('Dify 返回非 JSON'); }
+
+  const data = json.data;
+  const status = String(data?.status ?? '');
+  if (status === 'failed' || status === 'error') {
+    throw new Error(data?.error || json.message || '分层筛选工作流执行失败');
+  }
+
+  const rawOut = data?.outputs?.knowledge_items;
+  const text = typeof rawOut === 'string' ? rawOut : JSON.stringify(rawOut ?? []);
+
+  let knowledge_items;
+  try {
+    const cleaned = stripJsonFence(text);
+    knowledge_items = JSON.parse(cleaned);
+    if (!Array.isArray(knowledge_items)) throw new Error('非数组');
+  } catch {
+    knowledge_items = [{
+      id: 'k_raw',
+      type: 'explicit',
+      category: '原始输出',
+      title: '解析失败，原始内容',
+      content: text.slice(0, 500),
+      source: 'Dify',
+      priority: 'medium',
+      reusable: false,
+      selected: false,
+    }];
+  }
+
+  return { mock: false, knowledge_items };
+}
+
+function buildMockFilterItems(inputs) {
+  const goal = inputs.extract_goal || '（未填写）';
+  return [
+    {
+      id: 'mock_k1', type: 'explicit', category: '方法论',
+      title: `【演示】${goal.slice(0, 20)} - 核心流程`,
+      content: '未配置 KE_FILTER_API_KEY，当前显示演示数据。导入 ke-02 工作流并配置 Key 后可获取真实知识条目。',
+      source: '演示数据', priority: 'high', reusable: true, selected: true,
+    },
+    {
+      id: 'mock_k2', type: 'tacit', category: '经验技巧',
+      title: '【演示】关键经验汇总',
+      content: '请在 .env.local 中配置 KE_FILTER_API_KEY，并在 Dify 中导入 dify/ke-02-layered-filter.dsl.yml。',
+      source: '演示数据', priority: 'medium', reusable: true, selected: false,
+    },
+  ];
+}
+
+// ── Step 1：源头锚定（保持在下方）──────────────────────────────────────────
+
 function buildMockAnchorPackage(inputs) {
   const goal = inputs.extract_goal || '（未填写）';
   return {

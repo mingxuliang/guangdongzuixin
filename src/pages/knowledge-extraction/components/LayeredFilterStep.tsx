@@ -1,120 +1,58 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { keRunFilter, type KnowledgeItem } from '@/services/knowledgeExtractionApi';
 
 interface LayeredFilterStepProps {
-  onNext: () => void;
+  sessionId: string | null;
+  onNext: (items?: KnowledgeItem[]) => void;
   onPrev: () => void;
 }
 
-const knowledgeItems = [
-  {
-    id: 'k1',
-    type: 'explicit',
-    category: '知识点',
-    title: '知识萃取的五步法模型',
-    content: '源头锚定 → 分层筛选 → 结构化提炼 → 校验闭环 → 成果输出，每步有明确的输入输出标准',
-    source: 'PPT第3页',
-    priority: 'high',
-    reusable: true,
-    selected: true,
-  },
-  {
-    id: 'k2',
-    type: 'explicit',
-    category: '实操步骤',
-    title: '需求分析三要素识别方法',
-    content: '业务痛点识别（What）→ 根因分析（Why）→ 解决方案设计（How），配合访谈提纲使用',
-    source: '讲师讲稿第2章',
-    priority: 'high',
-    reusable: true,
-    selected: true,
-  },
-  {
-    id: 'k3',
-    type: 'explicit',
-    category: '方法论',
-    title: '三级大纲结构化设计原则',
-    content: '一级：课程模块（3-5个）；二级：知识单元；三级：具体知识点，遵循MECE原则',
-    source: '三级大纲文档',
-    priority: 'high',
-    reusable: true,
-    selected: true,
-  },
-  {
-    id: 'k4',
-    type: 'tacit',
-    category: '讲师经验',
-    title: '如何判断学员是否真正理解',
-    content: '讲师分享：不要问"听懂了吗"，要让学员复述或举例，观察眼神和肢体语言，关键节点设置小测验',
-    source: '课堂录音整理',
-    priority: 'high',
-    reusable: true,
-    selected: true,
-  },
-  {
-    id: 'k5',
-    type: 'tacit',
-    category: '避坑技巧',
-    title: '大纲设计常见误区',
-    content: '误区1：知识点堆砌无逻辑；误区2：目标与内容脱节；误区3：忽视学员基础差异。对应解决方案...',
-    source: '讲师经验分享',
-    priority: 'medium',
-    reusable: true,
-    selected: true,
-  },
-  {
-    id: 'k6',
-    type: 'tacit',
-    category: '学员反馈',
-    title: '学员最困惑的三个问题',
-    content: '①如何确定萃取边界；②显性知识和隐性知识如何区分；③萃取成果如何落地应用',
-    source: '课堂互动记录',
-    priority: 'medium',
-    reusable: true,
-    selected: false,
-  },
-  {
-    id: 'k7',
-    type: 'explicit',
-    category: '知识点',
-    title: '课程开发ADDIE模型',
-    content: '分析(Analysis)→设计(Design)→开发(Development)→实施(Implementation)→评估(Evaluation)',
-    source: 'PPT第7页',
-    priority: 'low',
-    reusable: false,
-    selected: false,
-  },
-  {
-    id: 'k8',
-    type: 'practice',
-    category: '优秀实践',
-    title: '学员小组：销售培训萃取案例',
-    content: '第3组学员将销售技巧课程萃取为"客户拜访七步法"工具卡，已在团队推广使用，效果显著',
-    source: '学员作业展示',
-    priority: 'high',
-    reusable: true,
-    selected: true,
-  },
-];
+const typeConfig: Record<string, { label: string; color: string; bg: string }> = {
+  explicit: { label: '显性知识', color: 'text-blue-700', bg: 'bg-blue-50 border-blue-200' },
+  tacit:    { label: '隐性知识', color: 'text-indigo-700', bg: 'bg-indigo-50 border-indigo-200' },
+  practice: { label: '优秀实践', color: 'text-sky-700', bg: 'bg-sky-50 border-sky-200' },
+};
 
-const LayeredFilterStep = ({ onNext, onPrev }: LayeredFilterStepProps) => {
-  const [items, setItems] = useState(knowledgeItems);
-  const [filterType, setFilterType] = useState<string>('all');
-  const [filterPriority, setFilterPriority] = useState<string>('all');
+const priorityConfig: Record<string, { label: string; dot: string }> = {
+  high:   { label: '高优先', dot: 'bg-blue-500' },
+  medium: { label: '中优先', dot: 'bg-sky-400' },
+  low:    { label: '低优先', dot: 'bg-gray-300' },
+};
+
+const LayeredFilterStep = ({ sessionId, onNext, onPrev }: LayeredFilterStepProps) => {
+  const [items, setItems] = useState<KnowledgeItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isMock, setIsMock] = useState(false);
+  const [filterType, setFilterType] = useState('all');
+  const [filterPriority, setFilterPriority] = useState('all');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!sessionId) return;
+    setLoading(true);
+    setError(null);
+    keRunFilter(sessionId)
+      .then(s => {
+        const raw = s.filter_items ?? [];
+        setItems(raw);
+        setIsMock(Boolean((s as { filter_error?: string }).filter_error?.startsWith('mock:')));
+      })
+      .catch(e => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, [sessionId]);
 
   const toggleExpand = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setExpandedIds(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   }, []);
 
-  const toggleItem = (id: string) => {
-    setItems(prev => prev.map(item => item.id === id ? { ...item, selected: !item.selected } : item));
-  };
+  const toggleItem = (id: string) =>
+    setItems(prev => prev.map(i => i.id === id ? { ...i, selected: !i.selected } : i));
 
   const filtered = items.filter(item => {
     if (filterType !== 'all' && item.type !== filterType) return false;
@@ -122,27 +60,67 @@ const LayeredFilterStep = ({ onNext, onPrev }: LayeredFilterStepProps) => {
     return true;
   });
 
-  const selectedCount = items.filter(i => i.selected).length;
-  const explicitCount = items.filter(i => i.type === 'explicit' && i.selected).length;
-  const tacitCount = items.filter(i => i.type === 'tacit' && i.selected).length;
-  const practiceCount = items.filter(i => i.type === 'practice' && i.selected).length;
+  const selectedCount  = items.filter(i => i.selected).length;
+  const explicitCount  = items.filter(i => i.type === 'explicit' && i.selected).length;
+  const tacitCount     = items.filter(i => i.type === 'tacit'    && i.selected).length;
+  const practiceCount  = items.filter(i => i.type === 'practice' && i.selected).length;
 
-  const typeConfig: Record<string, { label: string; color: string; bg: string; icon: string }> = {
-    explicit: { label: '显性知识', color: 'text-blue-700', bg: 'bg-blue-50 border-blue-200', icon: 'ri-book-2-line' },
-    tacit: { label: '隐性知识', color: 'text-indigo-700', bg: 'bg-indigo-50 border-indigo-200', icon: 'ri-brain-line' },
-    practice: { label: '优秀实践', color: 'text-sky-700', bg: 'bg-sky-50 border-sky-200', icon: 'ri-trophy-line' },
-  };
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-sm text-gray-500">正在调用 AI 进行知识分层筛选…</p>
+          <p className="text-xs text-gray-400">首次分析可能需要 30-60 秒</p>
+        </div>
+      </div>
+    );
+  }
 
-  const priorityConfig: Record<string, { label: string; dot: string }> = {
-    high: { label: '高优先', dot: 'bg-blue-500' },
-    medium: { label: '中优先', dot: 'bg-sky-400' },
-    low: { label: '低优先', dot: 'bg-gray-300' },
-  };
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-4">
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-6 py-4 text-sm text-red-700 max-w-lg text-center">
+          <p className="font-bold mb-1">分层筛选失败</p>
+          <p className="text-xs leading-relaxed">{error}</p>
+        </div>
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={onPrev}
+            className="px-4 py-2 text-xs text-gray-500 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer"
+          >
+            返回上一步
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!sessionId) return;
+              setError(null);
+              setLoading(true);
+              keRunFilter(sessionId)
+                .then(s => { setItems(s.filter_items ?? []); })
+                .catch(e => setError(e instanceof Error ? e.message : String(e)))
+                .finally(() => setLoading(false));
+            }}
+            className="px-4 py-2 text-xs text-white bg-blue-500 rounded-xl hover:bg-blue-600 transition-colors cursor-pointer"
+          >
+            重新分析
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex gap-5 h-full">
-      {/* Left stats */}
+      {/* Left: stats + filters */}
       <div className="w-[220px] flex-shrink-0 space-y-3">
+        {isMock && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] text-amber-700 leading-relaxed">
+            演示数据。配置 <code className="font-mono">KE_FILTER_API_KEY</code> 并导入 ke-02 工作流后可获取真实结果。
+          </div>
+        )}
         <div className="bg-white rounded-2xl border border-gray-100 p-4">
           <p className="text-xs font-bold text-gray-700 mb-3">筛选统计</p>
           <div className="space-y-2.5">
@@ -151,31 +129,22 @@ const LayeredFilterStep = ({ onNext, onPrev }: LayeredFilterStepProps) => {
               <span className="text-sm font-bold text-blue-600">{selectedCount}</span>
             </div>
             <div className="h-px bg-gray-100" />
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-blue-500" />
-                <span className="text-xs text-gray-500">显性知识</span>
+            {[
+              { label: '显性知识', count: explicitCount, dot: 'bg-blue-500' },
+              { label: '隐性知识', count: tacitCount, dot: 'bg-indigo-500' },
+              { label: '优秀实践', count: practiceCount, dot: 'bg-sky-400' },
+            ].map(row => (
+              <div key={row.label} className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-2 h-2 rounded-full ${row.dot}`} />
+                  <span className="text-xs text-gray-500">{row.label}</span>
+                </div>
+                <span className="text-xs font-semibold text-gray-700">{row.count}</span>
               </div>
-              <span className="text-xs font-semibold text-gray-700">{explicitCount}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-indigo-500" />
-                <span className="text-xs text-gray-500">隐性知识</span>
-              </div>
-              <span className="text-xs font-semibold text-gray-700">{tacitCount}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-sky-400" />
-                <span className="text-xs text-gray-500">优秀实践</span>
-              </div>
-              <span className="text-xs font-semibold text-gray-700">{practiceCount}</span>
-            </div>
+            ))}
           </div>
         </div>
 
-        {/* Filter controls */}
         <div className="bg-white rounded-2xl border border-gray-100 p-4">
           <p className="text-xs font-bold text-gray-700 mb-3">筛选条件</p>
           <div className="space-y-2">
@@ -226,9 +195,7 @@ const LayeredFilterStep = ({ onNext, onPrev }: LayeredFilterStepProps) => {
         <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden flex-1">
           <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="w-5 h-5 flex items-center justify-center">
-                <i className="ri-filter-3-line text-blue-500 text-sm" />
-              </div>
+              <i className="ri-filter-3-line text-blue-500 text-sm" />
               <span className="text-xs font-bold text-gray-800">知识内容筛选</span>
               <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{filtered.length} 条</span>
             </div>
@@ -237,23 +204,25 @@ const LayeredFilterStep = ({ onNext, onPrev }: LayeredFilterStepProps) => {
                 type="button"
                 onClick={() => setItems(prev => prev.map(i => ({ ...i, selected: true })))}
                 className="text-[10px] text-blue-500 hover:underline cursor-pointer whitespace-nowrap"
-              >
-                全选
-              </button>
+              >全选</button>
               <span className="text-gray-200">|</span>
               <button
                 type="button"
                 onClick={() => setItems(prev => prev.map(i => ({ ...i, selected: false })))}
                 className="text-[10px] text-gray-400 hover:underline cursor-pointer whitespace-nowrap"
-              >
-                清空
-              </button>
+              >清空</button>
             </div>
           </div>
+
           <div className="p-3 space-y-2 overflow-y-auto max-h-[calc(100vh-380px)]">
+            {filtered.length === 0 && (
+              <div className="py-16 text-center text-xs text-gray-400">
+                暂无符合条件的知识条目
+              </div>
+            )}
             {filtered.map(item => {
-              const tc = typeConfig[item.type];
-              const pc = priorityConfig[item.priority];
+              const tc = typeConfig[item.type] ?? typeConfig.explicit;
+              const pc = priorityConfig[item.priority] ?? priorityConfig.medium;
               return (
                 <div
                   key={item.id}
@@ -273,31 +242,35 @@ const LayeredFilterStep = ({ onNext, onPrev }: LayeredFilterStepProps) => {
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${tc.bg} ${tc.color}`}>
                           {tc.label}
                         </span>
-                        <span className="text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{item.category}</span>
+                        <span className="text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                          {item.category}
+                        </span>
                         <div className="flex items-center gap-1">
                           <div className={`w-1.5 h-1.5 rounded-full ${pc.dot}`} />
                           <span className="text-[10px] text-gray-400">{pc.label}</span>
                         </div>
                         {item.reusable && (
-                          <span className="text-[10px] text-sky-600 bg-sky-50 px-2 py-0.5 rounded-full border border-sky-200">可复用</span>
+                          <span className="text-[10px] text-sky-600 bg-sky-50 px-2 py-0.5 rounded-full border border-sky-200">
+                            可复用
+                          </span>
                         )}
                       </div>
                       <p className="text-xs font-semibold text-gray-800 mb-1">{item.title}</p>
                       <div>
-                        <p className={`text-[11px] text-gray-500 leading-relaxed break-all ${expandedIds.has(item.id) ? '' : 'line-clamp-2'}`}>
+                        <p className={`text-[11px] text-gray-500 leading-relaxed break-all ${
+                          expandedIds.has(item.id) ? '' : 'line-clamp-2'
+                        }`}>
                           {item.content}
                         </p>
                         {item.content.length > 60 && (
                           <button
                             type="button"
-                            onClick={(e) => toggleExpand(item.id, e)}
+                            onClick={e => toggleExpand(item.id, e)}
                             className="mt-0.5 text-[10px] text-blue-500 hover:text-blue-700 cursor-pointer whitespace-nowrap"
                           >
-                            {expandedIds.has(item.id) ? (
-                              <><i className="ri-arrow-up-s-line" /> 收起</>
-                            ) : (
-                              <><i className="ri-arrow-down-s-line" /> 展开全文</>
-                            )}
+                            {expandedIds.has(item.id)
+                              ? <><i className="ri-arrow-up-s-line" /> 收起</>
+                              : <><i className="ri-arrow-down-s-line" /> 展开全文</>}
                           </button>
                         )}
                       </div>
@@ -324,8 +297,9 @@ const LayeredFilterStep = ({ onNext, onPrev }: LayeredFilterStepProps) => {
           </button>
           <button
             type="button"
-            onClick={onNext}
-            className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors cursor-pointer whitespace-nowrap"
+            disabled={selectedCount === 0}
+            onClick={() => onNext(items.filter(i => i.selected))}
+            className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
           >
             进入结构化提炼
             <i className="ri-arrow-right-line" />
