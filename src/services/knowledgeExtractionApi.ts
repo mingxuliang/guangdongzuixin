@@ -19,6 +19,20 @@ export type KeSession = {
   }>;
   anchor_package: Record<string, unknown> | null;
   error_message: string | null;
+  updated_at?: string;
+  /** Step2 */
+  filter_status?: string;
+  filter_items?: KnowledgeItem[];
+  filter_error?: string | null;
+  /** Step3 */
+  refine_status?: string;
+  refine_result?: RefinementResult;
+  refine_error?: string | null;
+  /** Step4 批量评估 */
+  validation_items?: ValidationItem[];
+  validation_mock?: boolean;
+  /** 用户在 Step4 点击「完成萃取」后为 true */
+  extraction_completed?: boolean;
 };
 
 function url(path: string) {
@@ -59,6 +73,12 @@ export async function keGetSession(id: string): Promise<KeSession> {
   const r = await fetch(url(`/knowledge-extraction/sessions/${id}`));
   if (!r.ok) throw new Error(await r.text());
   return r.json() as Promise<KeSession>;
+}
+
+export async function keListSessions(): Promise<{ sessions: KeSession[] }> {
+  const r = await fetch(url('/knowledge-extraction/sessions'));
+  if (!r.ok) throw new Error(await r.text());
+  return r.json() as Promise<{ sessions: KeSession[] }>;
 }
 
 export async function keUploadAsset(

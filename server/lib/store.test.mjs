@@ -54,6 +54,7 @@ describe('store.mjs - Session Management', () => {
       expect(session.target_audience).toBe('');
       expect(session.use_scenes).toEqual(['knowledge-base']);
       expect(session.status).toBe('draft');
+      expect(session.extraction_completed).toBe(false);
       expect(session.assets).toEqual([]);
       expect(session.anchor_package).toBeNull();
       expect(session.error_message).toBeNull();
@@ -207,6 +208,19 @@ describe('store.mjs - Session Management', () => {
       const loaded = store.loadSession(created.id);
       expect(loaded.assets).toHaveLength(1);
       expect(loaded.assets[0].id).toBe('asset-1');
+    });
+  });
+
+  describe('listSessions', () => {
+    it('should return all sessions sorted by updated_at desc', async () => {
+      const a = store.createSessionRecord({ extract_goal: 'A' });
+      testSessionId = a.id;
+      await new Promise((r) => setTimeout(r, 15));
+      const b = store.createSessionRecord({ extract_goal: 'B' });
+      const list = store.listSessions();
+      expect(list.length).toBeGreaterThanOrEqual(2);
+      expect(list[0].id).toBe(b.id);
+      testSessionId = b.id;
     });
   });
 });

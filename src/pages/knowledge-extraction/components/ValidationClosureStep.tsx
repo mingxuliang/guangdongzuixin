@@ -5,6 +5,8 @@ interface ValidationClosureStepProps {
   sessionId: string | null;
   refinementResult: RefinementResult | null;
   onPrev: () => void;
+  /** 用户点击「完成萃取」进入成功页时回调（用于标记会话完成、刷新列表） */
+  onComplete?: () => void | Promise<void>;
 }
 
 // ─── 审核规则定义 ───────────────────────────────────────────────
@@ -412,7 +414,7 @@ const DeleteConfirm = ({ item, onConfirm, onClose }: DeleteConfirmProps) => (
 );
 
 // ─── 主组件 ──────────────────────────────────────────────────────
-const ValidationClosureStep = ({ sessionId, refinementResult, onPrev }: ValidationClosureStepProps) => {
+const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete }: ValidationClosureStepProps) => {
   const initialList = refinementResult ? buildFromRefinement(refinementResult) : [];
 
   const [knowledgeList, setKnowledgeList] = useState<KnowledgeItem[]>(initialList);
@@ -478,7 +480,10 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev }: Validati
     setReExtractItem(null);
   };
 
-  const finishExtraction = () => setViewMode('success');
+  const finishExtraction = () => {
+    setViewMode('success');
+    void onComplete?.();
+  };
   const backToList = () => setViewMode('list');
 
   const handleDownload = () => {

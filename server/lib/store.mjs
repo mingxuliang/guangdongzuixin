@@ -26,6 +26,28 @@ export function saveSession(session) {
   fs.writeFileSync(fp, JSON.stringify(session, null, 2), 'utf8');
 }
 
+/** 列出全部会话（按 updated_at 降序） */
+export function listSessions() {
+  ensureDir();
+  if (!fs.existsSync(DATA_DIR)) return [];
+  const files = fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.json'));
+  const sessions = [];
+  for (const f of files) {
+    try {
+      const raw = fs.readFileSync(path.join(DATA_DIR, f), 'utf8');
+      sessions.push(JSON.parse(raw));
+    } catch {
+      /* 跳过损坏文件 */
+    }
+  }
+  sessions.sort((a, b) => {
+    const ta = new Date(a.updated_at || 0).getTime();
+    const tb = new Date(b.updated_at || 0).getTime();
+    return tb - ta;
+  });
+  return sessions;
+}
+
 export function createSessionRecord(payload) {
   const id = randomUUID();
   const session = {
@@ -37,6 +59,7 @@ export function createSessionRecord(payload) {
     extract_goal: payload.extract_goal ?? '',
     target_audience: payload.target_audience ?? '',
     use_scenes: Array.isArray(payload.use_scenes) ? payload.use_scenes : ['knowledge-base'],
+    extraction_completed: false,
     status: 'draft',
     assets: [],
     anchor_package: null,

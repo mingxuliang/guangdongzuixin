@@ -5,7 +5,13 @@ import ExtractionHeader from './components/ExtractionHeader';
 import ExtractionList from './components/ExtractionList';
 import SourceAnchorStep from './components/SourceAnchorStep';
 import LayeredFilterStep from './components/LayeredFilterStep';
-import type { KnowledgeItem, RefinementResult } from '@/services/knowledgeExtractionApi';
+import {
+  isKeApiEnabled,
+  keGetSession,
+  kePatchSession,
+  type KnowledgeItem,
+  type RefinementResult,
+} from '@/services/knowledgeExtractionApi';
 import StructuredRefinementStep from './components/StructuredRefinementStep';
 import ValidationClosureStep from './components/ValidationClosureStep';
 
@@ -16,6 +22,8 @@ const KnowledgeExtractionPage = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [activeStep, setActiveStep] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
+  /** 从列表进入时递增，驱动 ExtractionList 重新请求 GET /sessions */
+  const [listRefresh, setListRefresh] = useState(0);
 
   const handleNew = () => {
     setActiveStep(0);
@@ -26,14 +34,44 @@ const KnowledgeExtractionPage = () => {
     setKeRefinementResult(null);
   };
 
-  const handleOpen = (_id: string) => {
-    setActiveStep(0);
-    setViewMode('workflow');
+  const handleOpen = async (id: string) => {
+    if (!isKeApiEnabled()) {
+      setActiveStep(0);
+      setViewMode('workflow');
+      setKeSessionId(null);
+      setKeAnchorSummary(null);
+      setKeFilterItems(null);
+      setKeRefinementResult(null);
+      return;
+    }
+    try {
+      const s = await keGetSession(id);
+      setKeSessionId(s.id);
+      const summary = s.anchor_package?.anchor_summary;
+      setKeAnchorSummary(typeof summary === 'string' ? summary : null);
+      setKeFilterItems(s.filter_items ?? null);
+      setKeRefinementResult(s.refine_result ?? null);
+      let step = 0;
+      if (!s.anchor_package) step = 0;
+      else if (s.filter_status !== 'ready' || !(s.filter_items?.length)) step = 1;
+      else if (s.refine_status !== 'ready' || !s.refine_result) step = 2;
+      else step = 3;
+      setActiveStep(step);
+      setViewMode('workflow');
+    } catch {
+      setActiveStep(0);
+      setViewMode('workflow');
+      setKeSessionId(null);
+      setKeAnchorSummary(null);
+      setKeFilterItems(null);
+      setKeRefinementResult(null);
+    }
   };
 
   const handleBackToList = () => {
     setViewMode('list');
     setActiveStep(0);
+    setListRefresh((k) => k + 1);
   };
 
   const [keSessionId, setKeSessionId] = useState<string | null>(null);
@@ -134,7 +172,7 @@ const KnowledgeExtractionPage = () => {
         {/* Page body */}
         <div className="flex-1 overflow-y-auto p-5">
           {viewMode === 'list' && (
-            <ExtractionList onNew={handleNew} onOpen={handleOpen} />
+            <ExtractionList onNew={handleNew} onOpen={handleOpen} refreshKey={listRefresh} />
           )}
           {viewMode === 'workflow' && activeStep === 0 && <SourceAnchorStep onNext={handleAnchorStepNext} />}
           {viewMode === 'workflow' && activeStep === 1 && (
@@ -167,6 +205,16 @@ const KnowledgeExtractionPage = () => {
               sessionId={keSessionId}
               refinementResult={keRefinementResult}
               onPrev={handlePrev}
+              onComplete={async () => {
+                if (keSessionId) {
+                  try {
+                    await kePatchSession(keSessionId, { extraction_completed: true });
+                  } catch {
+                    /* 仍刷新列表，展示当前服务端进度 */
+                  }
+                }
+                setListRefresh((k) => k + 1);
+              }}
             />
           )}
         </div>

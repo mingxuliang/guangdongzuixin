@@ -13,7 +13,7 @@ import multer from 'multer';
 import { runKeAnchorWorkflow, runKeFilterWorkflow, runKeRefineWorkflow, runKeReextractWorkflow, runKeValidationWorkflow } from './lib/difyClient.mjs';
 import { extractTextFromFile, mergeMaterialLines, AUDIO_PENDING, isAudioExt, transcribeAudio } from './lib/extractText.mjs';
 import { isOssConfigured, putLocalFileToOss } from './lib/ossUpload.mjs';
-import { createSessionRecord, loadSession, saveSession } from './lib/store.mjs';
+import { createSessionRecord, listSessions, loadSession, saveSession } from './lib/store.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -49,6 +49,14 @@ app.post('/api/knowledge-extraction/sessions', (req, res) => {
   }
 });
 
+app.get('/api/knowledge-extraction/sessions', (_req, res) => {
+  try {
+    res.json({ sessions: listSessions() });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
 app.get('/api/knowledge-extraction/sessions/:id', (req, res) => {
   const s = loadSession(req.params.id);
   if (!s) return res.status(404).json({ error: 'not_found' });
@@ -66,6 +74,7 @@ app.patch('/api/knowledge-extraction/sessions/:id', (req, res) => {
   if (b.extract_goal !== undefined) s.extract_goal = b.extract_goal;
   if (b.target_audience !== undefined) s.target_audience = b.target_audience;
   if (b.use_scenes) s.use_scenes = b.use_scenes;
+  if (b.extraction_completed !== undefined) s.extraction_completed = Boolean(b.extraction_completed);
   saveSession(s);
   res.json(s);
 });
