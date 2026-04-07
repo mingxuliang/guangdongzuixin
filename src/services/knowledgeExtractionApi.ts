@@ -180,6 +180,42 @@ export async function keReextractItem(
   return JSON.parse(text) as { optimized_content: string; mock?: boolean };
 }
 
+// ──────── Step 4b 类型：质量评估 ─────────────────────────────────────────────
+
+export type ValidationItem = {
+  id: string;
+  knowledge_accuracy: number;      // 0-100
+  knowledge_accuracy_reason: string;
+  goal_alignment: number;          // 0-100
+  goal_alignment_reason: string;
+  reuse_value: number;             // 0-100
+  reuse_value_reason: string;
+  overall: number;                 // 三维均值
+  status: 'pass' | 'needs_review' | 'fail';
+  suggestion: string;
+};
+
+export async function keRunValidation(
+  sessionId: string,
+  structured_result: RefinementResult,
+): Promise<{ session_id: string; validation_items: ValidationItem[]; mock: boolean }> {
+  const r = await fetch(url(`/knowledge-extraction/sessions/${sessionId}/validate/run`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ structured_result }),
+  });
+  const text = await r.text();
+  if (!r.ok) {
+    try {
+      const j = JSON.parse(text) as { error?: string };
+      throw new Error(j.error || text);
+    } catch {
+      throw new Error(text);
+    }
+  }
+  return JSON.parse(text) as { session_id: string; validation_items: ValidationItem[]; mock: boolean };
+}
+
 export async function keRunAnchor(sessionId: string): Promise<KeSession> {
   const r = await fetch(url(`/knowledge-extraction/sessions/${sessionId}/anchor/run`), {
     method: 'POST',

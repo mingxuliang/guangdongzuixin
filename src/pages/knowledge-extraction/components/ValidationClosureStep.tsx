@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { keReextractItem, type RefinementResult } from '../../../services/knowledgeExtractionApi';
+import { useState, useEffect, useRef } from 'react';
+import { keReextractItem, keRunValidation, type RefinementResult, type ValidationItem } from '../../../services/knowledgeExtractionApi';
 
 interface ValidationClosureStepProps {
   sessionId: string | null;
@@ -45,6 +45,15 @@ interface KnowledgeItem {
   title: string;
   content: string;
   tags: string[];
+  /** AI 三维评分（0-100），null 表示尚未评估 */
+  aiScores: { rule1: number; rule2: number; rule3: number } | null;
+  /** AI 各维度评估说明 */
+  aiReasons: { rule1: string; rule2: string; rule3: string } | null;
+  /** AI 综合状态 */
+  aiStatus: 'pass' | 'needs_review' | 'fail' | null;
+  /** AI 优化建议 */
+  aiSuggestion: string;
+  /** 人工手动覆盖 pass/fail */
   validation: { rule1: boolean; rule2: boolean; rule3: boolean };
   v1Content: string;
   v2Content: string;
@@ -63,6 +72,10 @@ function buildFromRefinement(result: RefinementResult): KnowledgeItem[] {
       title: item.title,
       content: item.content,
       tags: item.tags ?? [],
+      aiScores: null,
+      aiReasons: null,
+      aiStatus: null,
+      aiSuggestion: '',
       validation: { rule1: true, rule2: true, rule3: true },
       v1Content: item.content,
       v2Content: item.content,
@@ -78,6 +91,10 @@ function buildFromRefinement(result: RefinementResult): KnowledgeItem[] {
       title: item.title,
       content: item.content,
       tags: [item.source, item.highlight].filter(Boolean),
+      aiScores: null,
+      aiReasons: null,
+      aiStatus: null,
+      aiSuggestion: '',
       validation: { rule1: true, rule2: true, rule3: true },
       v1Content: item.content,
       v2Content: item.content,
@@ -93,6 +110,10 @@ function buildFromRefinement(result: RefinementResult): KnowledgeItem[] {
       title: item.title,
       content: item.desc,
       tags: [item.format].filter(Boolean),
+      aiScores: null,
+      aiReasons: null,
+      aiStatus: null,
+      aiSuggestion: '',
       validation: { rule1: true, rule2: true, rule3: true },
       v1Content: item.desc,
       v2Content: item.desc,
@@ -102,6 +123,37 @@ function buildFromRefinement(result: RefinementResult): KnowledgeItem[] {
   });
 
   return items;
+}
+
+// 将 ValidationItem 数组的评分合并到 KnowledgeItem 列表
+function applyValidationScores(items: KnowledgeItem[], validations: ValidationItem[]): KnowledgeItem[] {
+  const scoreMap = new Map(validations.map(v => [v.id, v]));
+  return items.map(item => {
+    const v = scoreMap.get(item.id);
+    if (!v) return item;
+    const pass = (score: number) => score >= 60;
+    return {
+      ...item,
+      aiScores: {
+        rule1: v.knowledge_accuracy,
+        rule2: v.goal_alignment,
+        rule3: v.reuse_value,
+      },
+      aiReasons: {
+        rule1: v.knowledge_accuracy_reason,
+        rule2: v.goal_alignment_reason,
+        rule3: v.reuse_value_reason,
+      },
+      aiStatus: v.status,
+      aiSuggestion: v.suggestion,
+      // AI 分数同步覆盖人工 validation（>=60 视为通过）
+      validation: {
+        rule1: pass(v.knowledge_accuracy),
+        rule2: pass(v.goal_alignment),
+        rule3: pass(v.reuse_value),
+      },
+    };
+  });
 }
 
 // ─── 差异分析工具函数 ────────────────────────────────────────────
@@ -372,6 +424,29 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev }: Validati
   const [reExtractItem, setReExtractItem] = useState<KnowledgeItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<KnowledgeItem | null>(null);
 
+  // AI 批量评估状态
+  const [validating, setValidating] = useState(false);
+  const [validateError, setValidateError] = useState<string | null>(null);
+  const [validateMock, setValidateMock] = useState(false);
+  const validateCalledRef = useRef(false);
+
+  // 进入本步骤时自动触发 AI 评估
+  useEffect(() => {
+    if (!sessionId || !refinementResult || validateCalledRef.current) return;
+    validateCalledRef.current = true;
+    setValidating(true);
+    setValidateError(null);
+    keRunValidation(sessionId, refinementResult)
+      .then(result => {
+        setValidateMock(result.mock);
+        setKnowledgeList(prev => applyValidationScores(prev, result.validation_items));
+      })
+      .catch(e => {
+        setValidateError(String((e as Error)?.message ?? e));
+      })
+      .finally(() => setValidating(false));
+  }, [sessionId, refinementResult]);
+
   const calculatePassRate = () => {
     if (knowledgeList.length === 0) return 0;
     const totalChecks = knowledgeList.length * 3;
@@ -517,10 +592,30 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev }: Validati
   // ─── 主列表页面 ──────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4 h-full">
+      {/* AI 评估状态横幅 */}
+      {validating && (
+        <div className="flex items-center gap-2.5 bg-blue-50 border border-blue-100 rounded-xl px-4 py-2.5">
+          <i className="ri-loader-4-line animate-spin text-blue-500 text-sm flex-shrink-0" />
+          <span className="text-xs text-blue-700 font-medium">AI 正在对 {knowledgeList.length} 条知识进行三维度质量评估...</span>
+        </div>
+      )}
+      {validateError && (
+        <div className="flex items-center gap-2.5 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5">
+          <i className="ri-error-warning-line text-red-500 text-sm flex-shrink-0" />
+          <span className="text-xs text-red-700">AI评估失败：{validateError}（已使用人工评审模式）</span>
+        </div>
+      )}
+      {validateMock && !validating && !validateError && (
+        <div className="flex items-center gap-2.5 bg-amber-50 border border-amber-100 rounded-xl px-4 py-2.5">
+          <i className="ri-information-line text-amber-500 text-sm flex-shrink-0" />
+          <span className="text-xs text-amber-700">【演示模式】未配置 KE_VALIDATION_API_KEY，当前显示演示评分。导入 ke-05 工作流并配置 Key 后可获取真实 AI 评估。</span>
+        </div>
+      )}
+
       {/* 顶部统计栏 */}
       <div className="bg-white rounded-2xl border border-gray-100 px-5 py-3 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <span className="text-xs font-semibold text-gray-500 mr-2">审核规则</span>
+          <span className="text-xs font-semibold text-gray-500 mr-2">评估维度</span>
           {validationRules.map(rule => (
             <div key={rule.id} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border ${rule.border} ${rule.bg}`}>
               <i className={`${rule.icon} text-sm ${rule.color}`} />
@@ -613,12 +708,16 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev }: Validati
 
                   {!isEditing && (
                     <div className="flex items-center gap-0 px-3 py-2">
-                      <div className="flex items-center gap-1.5 flex-1">
+                      <div className="flex items-center gap-1.5 flex-1 flex-wrap">
                         {validationRules.map(rule => {
                           const passed = item.validation[rule.id as keyof typeof item.validation];
+                          const score = item.aiScores?.[rule.id as keyof typeof item.aiScores];
+                          const reason = item.aiReasons?.[rule.id as keyof typeof item.aiReasons];
+                          const hasAi = score !== undefined && score !== null;
                           return (
-                            <button key={rule.id} type="button" onClick={() => toggleValidation(item.id, rule.id)}
-                              title={`${rule.title}：${rule.desc}`}
+                            <button key={rule.id} type="button"
+                              onClick={() => toggleValidation(item.id, rule.id)}
+                              title={hasAi ? `${rule.title}：${score}分 — ${reason || rule.desc}（点击手动切换）` : `${rule.title}：${rule.desc}`}
                               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer whitespace-nowrap ${
                                 passed ? `${rule.bg} ${rule.border} ${rule.color}` : 'bg-gray-50 border-gray-200 text-gray-400 hover:bg-gray-100'
                               }`}>
@@ -626,17 +725,43 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev }: Validati
                                 <i className={`text-[8px] font-bold ${passed ? 'ri-check-line' : 'ri-close-line'}`} />
                               </div>
                               <span className="text-[10px] font-semibold">{rule.title}</span>
+                              {hasAi && (
+                                <span className={`text-[9px] font-bold px-1 rounded ${
+                                  score >= 80 ? 'text-emerald-700 bg-emerald-100' :
+                                  score >= 60 ? 'text-amber-700 bg-amber-100' :
+                                  'text-red-700 bg-red-100'
+                                }`}>{score}</span>
+                              )}
                             </button>
                           );
                         })}
-                        <div className={`ml-1 flex items-center gap-1.5 px-2 py-1 rounded-lg ${allPass ? 'bg-blue-50' : itemRate >= 60 ? 'bg-blue-50/50' : 'bg-gray-100'}`}>
-                          <div className="w-12 h-1 bg-gray-200 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full transition-all ${allPass ? 'bg-blue-500' : itemRate >= 60 ? 'bg-blue-300' : 'bg-gray-300'}`} style={{ width: `${itemRate}%` }} />
+                        {/* 综合分 / 进度条 */}
+                        {item.aiScores ? (
+                          <div className={`ml-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border ${
+                            allPass ? 'bg-blue-50 border-blue-200' : itemRate >= 60 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'
+                          }`}>
+                            <i className={`ri-bar-chart-2-line text-xs ${allPass ? 'text-blue-500' : itemRate >= 60 ? 'text-amber-500' : 'text-red-500'}`} />
+                            <span className={`text-[10px] font-bold ${allPass ? 'text-blue-600' : itemRate >= 60 ? 'text-amber-600' : 'text-red-600'}`}>
+                              综合 {Math.round((item.aiScores.rule1 + item.aiScores.rule2 + item.aiScores.rule3) / 3)}
+                            </span>
                           </div>
-                          <span className={`text-[10px] font-bold ${allPass ? 'text-blue-600' : itemRate >= 60 ? 'text-blue-400' : 'text-gray-400'}`}>{itemRate}%</span>
-                        </div>
+                        ) : (
+                          <div className={`ml-1 flex items-center gap-1.5 px-2 py-1 rounded-lg ${allPass ? 'bg-blue-50' : itemRate >= 60 ? 'bg-blue-50/50' : 'bg-gray-100'}`}>
+                            <div className="w-12 h-1 bg-gray-200 rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full transition-all ${allPass ? 'bg-blue-500' : itemRate >= 60 ? 'bg-blue-300' : 'bg-gray-300'}`} style={{ width: `${itemRate}%` }} />
+                            </div>
+                            <span className={`text-[10px] font-bold ${allPass ? 'text-blue-600' : itemRate >= 60 ? 'text-blue-400' : 'text-gray-400'}`}>{itemRate}%</span>
+                          </div>
+                        )}
+                        {/* AI 优化建议 */}
+                        {item.aiSuggestion && item.aiStatus !== 'pass' && (
+                          <div className="w-full mt-1 flex items-start gap-1.5 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">
+                            <i className="ri-lightbulb-line text-amber-500 text-xs flex-shrink-0 mt-0.5" />
+                            <span className="text-[10px] text-amber-700 leading-relaxed">{item.aiSuggestion}</span>
+                          </div>
+                        )}
                       </div>
-                      <div className="flex items-center gap-0.5 flex-shrink-0 ml-2">
+                      <div className="flex items-center gap-0.5 flex-shrink-0 ml-2 self-start mt-0.5">
                         <button type="button" onClick={() => setVersionPanelItem(item)} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all cursor-pointer" title="版本对比">
                           <i className="ri-git-merge-line text-xs" />
                         </button>

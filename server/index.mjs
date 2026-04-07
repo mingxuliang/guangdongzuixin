@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 
-import { runKeAnchorWorkflow, runKeFilterWorkflow, runKeRefineWorkflow, runKeReextractWorkflow } from './lib/difyClient.mjs';
+import { runKeAnchorWorkflow, runKeFilterWorkflow, runKeRefineWorkflow, runKeReextractWorkflow, runKeValidationWorkflow } from './lib/difyClient.mjs';
 import { extractTextFromFile, mergeMaterialLines, AUDIO_PENDING, isAudioExt, transcribeAudio } from './lib/extractText.mjs';
 import { isOssConfigured, putLocalFileToOss } from './lib/ossUpload.mjs';
 import { createSessionRecord, loadSession, saveSession } from './lib/store.mjs';
@@ -325,6 +325,40 @@ app.post('/api/knowledge-extraction/sessions/:id/reextract', async (req, res) =>
     res.json({ optimized_content: result.optimized_content, mock: result.mock });
   } catch (e) {
     console.error('[reextract] 失败:', String(e?.message || e));
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+app.post('/api/knowledge-extraction/sessions/:id/validate/run', async (req, res) => {
+  const s = loadSession(req.params.id);
+  if (!s) return res.status(404).json({ error: 'not_found' });
+
+  const { structured_result } = req.body || {};
+  if (!structured_result || typeof structured_result !== 'object') {
+    return res.status(400).json({ error: 'structured_result（对象）必填' });
+  }
+
+  try {
+    const inputs = {
+      structured_result_json: JSON.stringify(structured_result),
+      extract_goal: s.extract_goal || '',
+      target_audience: s.target_audience || '',
+    };
+
+    const result = await runKeValidationWorkflow(inputs);
+
+    // 持久化评估结果到 session
+    s.validation_items = result.validation_items;
+    s.validation_mock = result.mock;
+    saveSession(s);
+
+    res.json({
+      session_id: s.id,
+      validation_items: result.validation_items,
+      mock: result.mock,
+    });
+  } catch (e) {
+    console.error('[validate/run] 失败:', String(e?.message || e));
     res.status(500).json({ error: String(e?.message || e) });
   }
 });

@@ -404,6 +404,121 @@ export async function runKeAudioRefineWorkflow(inputs) {
   return { mock: false, refined_transcript };
 }
 
+// ── Step 4b：校验闭环 - 批量质量评估 ────────────────────────────────────────
+
+export async function runKeValidationWorkflow(inputs) {
+  const apiKey = process.env.KE_VALIDATION_API_KEY?.trim();
+  if (!apiKey) {
+    return { mock: true, validation_items: buildMockValidationItems(inputs) };
+  }
+
+  const user = process.env.KE_ANCHOR_USER?.trim() || 'knowledge-extraction-validation';
+  const url = `${getV1Root()}/workflows/run`;
+  const timeoutMs = Number(process.env.KE_ANCHOR_TIMEOUT_MS || 180000);
+
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal: controller.signal,
+      body: JSON.stringify({ inputs, response_mode: 'blocking', user }),
+    });
+  } finally {
+    clearTimeout(tid);
+  }
+
+  const rawText = await res.text();
+  if (!res.ok) throw new Error(`Dify Validation Workflow ${res.status}: ${rawText.slice(0, 800)}`);
+
+  let json;
+  try { json = JSON.parse(rawText); } catch { throw new Error('Dify 返回非 JSON'); }
+
+  const data = json.data;
+  const status = String(data?.status ?? '');
+  if (status === 'failed' || status === 'error') {
+    throw new Error(data?.error || json.message || '质量评估工作流执行失败');
+  }
+
+  const rawOut = data?.outputs?.validation_result;
+  const text = typeof rawOut === 'string' ? rawOut : JSON.stringify(rawOut ?? []);
+
+  let validation_items;
+  try {
+    const cleaned = stripJsonFence(text);
+    const parsed = JSON.parse(cleaned);
+    validation_items = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    try {
+      const match = text.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error('未找到 JSON 数组');
+      const parsed = JSON.parse(match[0]);
+      validation_items = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      // 解析失败：返回 mock 兜底数据
+      return { mock: true, validation_items: buildMockValidationItems(inputs) };
+    }
+  }
+
+  // 归一化字段，确保每条评估结果格式完整
+  validation_items = validation_items.map(item => {
+    const ka = Math.min(100, Math.max(0, Number(item.knowledge_accuracy ?? 80)));
+    const ga = Math.min(100, Math.max(0, Number(item.goal_alignment ?? 80)));
+    const rv = Math.min(100, Math.max(0, Number(item.reuse_value ?? 80)));
+    const overall = Math.round((ka + ga + rv) / 3);
+    let itemStatus = item.status;
+    if (!['pass', 'needs_review', 'fail'].includes(itemStatus)) {
+      itemStatus = overall >= 80 ? 'pass' : overall >= 60 ? 'needs_review' : 'fail';
+    }
+    return {
+      id: item.id ?? '',
+      knowledge_accuracy: ka,
+      knowledge_accuracy_reason: item.knowledge_accuracy_reason ?? '',
+      goal_alignment: ga,
+      goal_alignment_reason: item.goal_alignment_reason ?? '',
+      reuse_value: rv,
+      reuse_value_reason: item.reuse_value_reason ?? '',
+      overall,
+      status: itemStatus,
+      suggestion: item.suggestion ?? '',
+    };
+  });
+
+  return { mock: false, validation_items };
+}
+
+function buildMockValidationItems(inputs) {
+  // 从 structured_result_json 中提取 id，生成演示评分
+  let ids = [];
+  try {
+    const parsed = JSON.parse(inputs.structured_result_json || '{}');
+    const ckIds = (parsed.core_knowledge ?? []).map(i => i.id);
+    const cmIds = (parsed.case_materials ?? []).map(i => i.id);
+    ids = [...ckIds, ...cmIds];
+  } catch { /* 解析失败时使用空数组 */ }
+
+  if (ids.length === 0) ids = ['ck1', 'cm1'];
+
+  return ids.map((id, idx) => ({
+    id,
+    knowledge_accuracy: 75 + (idx % 3) * 5,
+    knowledge_accuracy_reason: '未配置 KE_VALIDATION_API_KEY，演示数据',
+    goal_alignment: 80 + (idx % 2) * 5,
+    goal_alignment_reason: '未配置 KE_VALIDATION_API_KEY，演示数据',
+    reuse_value: 70 + (idx % 4) * 5,
+    reuse_value_reason: '未配置 KE_VALIDATION_API_KEY，演示数据',
+    overall: Math.round((75 + (idx % 3) * 5 + 80 + (idx % 2) * 5 + 70 + (idx % 4) * 5) / 3),
+    status: 'needs_review',
+    suggestion: '请在 .env.local 配置 KE_VALIDATION_API_KEY 并导入 ke-05 工作流以获取真实评估',
+  }));
+}
+
 // ── Step 1：源头锚定（保持在下方）──────────────────────────────────────────
 
 function buildMockAnchorPackage(inputs) {
