@@ -24,6 +24,7 @@
     "@stripe/react-stripe-js": "4.0.2",
     "@supabase/supabase-js": "2.57.4",
     "cors": "^2.8.5",
+    "docx": "^9.6.1",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "firebase": "12.0.0",
@@ -46,7 +47,6 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.1",
-    "vitest": "^3.0.0",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
@@ -61,6 +61,7 @@
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.35.1",
     "unplugin-auto-import": "^19.3.0",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "vitest": "^3.0.0"
   }
 }

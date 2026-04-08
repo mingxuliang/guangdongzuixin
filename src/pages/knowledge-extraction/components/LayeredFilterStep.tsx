@@ -1,7 +1,11 @@
 import { useState, useCallback, useEffect } from 'react';
+import { GenerationProgressScreen } from '@/components/GenerationProgressScreen';
 import { keGetSession, keRunFilter, type KnowledgeItem } from '@/services/knowledgeExtractionApi';
 import { recoverFilterItemsFromKRaw } from '../utils/recoverFilterItems';
 import { pollFilterUntilSettled } from '../utils/longRunningSession';
+import { KePagination } from './KePagination';
+
+const PAGE_SIZE = 10;
 
 interface LayeredFilterStepProps {
   sessionId: string | null;
@@ -29,6 +33,7 @@ const LayeredFilterStep = ({ sessionId, onNext, onPrev }: LayeredFilterStepProps
   const [filterType, setFilterType] = useState('all');
   const [filterPriority, setFilterPriority] = useState('all');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     if (!sessionId) {
@@ -110,6 +115,11 @@ const LayeredFilterStep = ({ sessionId, onNext, onPrev }: LayeredFilterStepProps
     return true;
   });
 
+  // 筛选条件变化时重置到第 1 页
+  useEffect(() => { setPage(1); }, [filterType, filterPriority]);
+
+  const pagedItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
   const selectedCount  = items.filter(i => i.selected).length;
   const explicitCount  = items.filter(i => i.type === 'explicit' && i.selected).length;
   const tacitCount     = items.filter(i => i.type === 'tacit'    && i.selected).length;
@@ -137,12 +147,13 @@ const LayeredFilterStep = ({ sessionId, onNext, onPrev }: LayeredFilterStepProps
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center space-y-3">
-          <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-sm text-gray-500">正在调用 AI 进行知识分层筛选…</p>
-          <p className="text-xs text-gray-400">首次分析可能需要 1–3 分钟；请勿关闭页面</p>
-        </div>
+      <div className="min-h-[520px] flex flex-col">
+        <GenerationProgressScreen
+          layout="panel"
+          title="正在进行分层筛选"
+          subtitle="AI 正在解析知识条目并按显性、隐性、优秀实践分层，首次分析约 1-3 分钟"
+          stepLabels={['分析知识材料', '识别显隐知识', '划分优先级', '生成筛选列表']}
+        />
       </div>
     );
   }
@@ -284,13 +295,13 @@ const LayeredFilterStep = ({ sessionId, onNext, onPrev }: LayeredFilterStepProps
             </div>
           </div>
 
-          <div className="p-3 space-y-2 overflow-y-auto max-h-[calc(100vh-380px)]">
+          <div className="p-3 space-y-2 overflow-y-auto max-h-[calc(100vh-420px)]">
             {filtered.length === 0 && (
               <div className="py-16 text-center text-xs text-gray-400">
                 暂无符合条件的知识条目
               </div>
             )}
-            {filtered.map(item => {
+            {pagedItems.map(item => {
               const tc = typeConfig[item.type] ?? typeConfig.explicit;
               const pc = priorityConfig[item.priority] ?? priorityConfig.medium;
               return (
@@ -312,6 +323,11 @@ const LayeredFilterStep = ({ sessionId, onNext, onPrev }: LayeredFilterStepProps
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${tc.bg} ${tc.color}`}>
                           {tc.label}
                         </span>
+                        {item.knowledge_form && (
+                          <span className="text-[10px] text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full border border-violet-100">
+                            {item.knowledge_form}
+                          </span>
+                        )}
                         <span className="text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
                           {item.category}
                         </span>
@@ -344,6 +360,12 @@ const LayeredFilterStep = ({ sessionId, onNext, onPrev }: LayeredFilterStepProps
                           </button>
                         )}
                       </div>
+                      {expandedIds.has(item.id) && item.structured_body && (
+                        <div className="mt-2 bg-blue-50/50 rounded-xl p-2.5 border border-blue-100">
+                          <p className="text-[9px] font-bold text-blue-600 mb-1 uppercase tracking-wider">结构化内容</p>
+                          <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-line">{item.structured_body}</p>
+                        </div>
+                      )}
                       <p className="text-[10px] text-gray-400 mt-1.5">
                         <i className="ri-file-line mr-1" />
                         来源：{item.source}
@@ -355,6 +377,16 @@ const LayeredFilterStep = ({ sessionId, onNext, onPrev }: LayeredFilterStepProps
             })}
           </div>
         </div>
+
+        {filtered.length > PAGE_SIZE && (
+          <KePagination
+            total={filtered.length}
+            pageSize={PAGE_SIZE}
+            current={page}
+            onChange={setPage}
+            className="border border-gray-100 rounded-xl bg-white px-3"
+          />
+        )}
 
         <div className="flex items-center justify-between">
           <button

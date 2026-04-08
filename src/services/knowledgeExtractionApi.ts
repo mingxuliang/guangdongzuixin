@@ -102,9 +102,11 @@ export async function keUploadAsset(
 export type KnowledgeItem = {
   id: string;
   type: 'explicit' | 'tacit' | 'practice';
+  knowledge_form?: string;
   category: string;
   title: string;
   content: string;
+  structured_body?: string;
   source: string;
   priority: 'high' | 'medium' | 'low';
   reusable: boolean;
@@ -134,6 +136,9 @@ export type RefinementCoreKnowledge = {
   title: string;
   type: string;
   content: string;
+  method_steps?: string[];
+  key_principles?: string[];
+  applicable_when?: string;
   tags: string[];
 };
 
@@ -141,6 +146,10 @@ export type RefinementCaseMaterial = {
   id: string;
   title: string;
   source: string;
+  situation?: string;
+  task?: string;
+  action?: string;
+  result?: string;
   content: string;
   highlight: string;
 };
@@ -149,6 +158,8 @@ export type RefinementPracticalTool = {
   id: string;
   title: string;
   format: string;
+  tool_type?: string;
+  tool_content?: string;
   desc: string;
 };
 

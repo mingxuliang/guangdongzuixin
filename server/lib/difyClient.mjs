@@ -68,6 +68,53 @@ function normalizeWorkflowOutputs(outputs) {
   return merged;
 }
 
+function escapeControlCharsInJsonStrings(chunk) {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < chunk.length; i++) {
+    const ch = chunk[i];
+
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === '\\') {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      out += ch;
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === '\n') {
+        out += '\\n';
+        continue;
+      }
+      if (ch === '\r') {
+        out += '\\r';
+        continue;
+      }
+      if (ch === '\t') {
+        out += '\\t';
+        continue;
+      }
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
 function parseJsonLenient(chunk) {
   const c = chunk.trim();
   try {
@@ -76,7 +123,16 @@ function parseJsonLenient(chunk) {
     try {
       return JSON.parse(c.replace(/,\s*([\]}])/g, '$1'));
     } catch {
-      throw new Error('JSON parse failed');
+      const escaped = escapeControlCharsInJsonStrings(c);
+      try {
+        return JSON.parse(escaped);
+      } catch {
+        try {
+          return JSON.parse(escaped.replace(/,\s*([\]}])/g, '$1'));
+        } catch {
+          throw new Error('JSON parse failed');
+        }
+      }
     }
   }
 }
@@ -326,9 +382,11 @@ export async function runKeFilterWorkflow(inputs) {
   knowledge_items = knowledge_items.map((item, i) => ({
     id: item.id ?? `k${i + 1}`,
     type: item.type ?? 'explicit',
+    knowledge_form: item.knowledge_form ?? '',
     category: item.category ?? '未分类',
     title: item.title ?? `知识条目${i + 1}`,
     content: item.content ?? '',
+    structured_body: item.structured_body ?? '',
     source: item.source ?? 'Dify',
     priority: item.priority ?? 'medium',
     reusable: item.reusable !== false,

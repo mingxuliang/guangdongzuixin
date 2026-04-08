@@ -11,9 +11,13 @@ function normalizeOne(item: Record<string, unknown>, i: number): KnowledgeItem {
   return {
     id: String(item.id ?? `k${i + 1}`),
     type,
+    knowledge_form:
+      typeof item.knowledge_form === 'string' ? item.knowledge_form : undefined,
     category: String(item.category ?? '未分类'),
     title: String(item.title ?? `知识条目${i + 1}`),
     content: String(item.content ?? ''),
+    structured_body:
+      typeof item.structured_body === 'string' ? item.structured_body : undefined,
     source: String(item.source ?? 'Dify'),
     priority,
     reusable: item.reusable !== false,

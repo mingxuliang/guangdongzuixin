@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
+import { GenerationProgressScreen } from '@/components/GenerationProgressScreen';
 import {
   isKeApiEnabled,
   keCreateSession,
@@ -385,6 +386,30 @@ const SourceAnchorStep = ({ onNext, onSessionReady, resumeSessionId }: SourceAnc
 
   const apiBusy = useApi && !sessionId;
   const nextDisabled = submitting || apiBusy || Boolean(sessionInitError);
+
+  const hasAudioPending =
+    courseAudioFiles.some((f) => f.audioPending) || manualFiles.some((f) => f.audioPending);
+
+  if (submitting) {
+    const anchorSteps = hasAudioPending
+      ? ['转写音频文件', '解析文档内容', '锚定知识主题', '生成锚定摘要']
+      : ['解析文档内容', '识别知识主题', '锚定关键节点', '生成锚定摘要'];
+
+    return (
+      <div className="min-h-[520px] flex flex-col">
+        <GenerationProgressScreen
+          layout="panel"
+          title={hasAudioPending ? '正在转写音频 + 锚定分析' : '正在锚定知识源头'}
+          subtitle={
+            hasAudioPending
+              ? '音频转写需要一点时间，智能引擎正在逐步处理，请耐心等候…'
+              : '智能引擎正在解析资料并提炼核心知识主题，请稍候片刻'
+          }
+          stepLabels={anchorSteps}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

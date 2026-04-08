@@ -1,5 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
+import { CheckCheck, CheckCircle2 } from 'lucide-react';
+import { GenerationProgressScreen } from '@/components/GenerationProgressScreen';
 import { keReextractItem, keRunValidation, type RefinementResult, type ValidationItem } from '../../../services/knowledgeExtractionApi';
+import { exportKnowledgeToWord } from '../utils/exportToWord';
+import { KePagination } from './KePagination';
+
+const PAGE_SIZE = 8;
 
 interface ValidationClosureStepProps {
   sessionId: string | null;
@@ -43,10 +49,23 @@ const validationRules = [
 // ─── 知识条目类型 ────────────────────────────────────────────────
 interface KnowledgeItem {
   id: string;
+  kind: 'core' | 'case' | 'tool';
   type: string;
   title: string;
   content: string;
   tags: string[];
+  source?: string;
+  highlight?: string;
+  format?: string;
+  toolContent?: string;
+  toolDesc?: string;
+  methodSteps?: string[];
+  keyPrinciples?: string[];
+  applicableWhen?: string;
+  situation?: string;
+  task?: string;
+  action?: string;
+  result?: string;
   /** AI 三维评分（0-100），null 表示尚未评估 */
   aiScores: { rule1: number; rule2: number; rule3: number } | null;
   /** AI 各维度评估说明 */
@@ -63,65 +82,127 @@ interface KnowledgeItem {
   reExtracted: boolean;
 }
 
+function serializeKnowledgeItem(item: KnowledgeItem): string {
+  const lines: string[] = [];
+  lines.push(`标题：${item.title}`);
+  lines.push(`类型：${item.type}`);
+
+  if (item.kind === 'core') {
+    lines.push(`核心内容：${item.content}`);
+    if (item.methodSteps?.length) {
+      lines.push('操作步骤：');
+      item.methodSteps.forEach((step, idx) => lines.push(`${idx + 1}. ${step}`));
+    }
+    if (item.keyPrinciples?.length) {
+      lines.push(`关键要点：${item.keyPrinciples.join('；')}`);
+    }
+    if (item.applicableWhen) {
+      lines.push(`适用场景：${item.applicableWhen}`);
+    }
+  }
+
+  if (item.kind === 'case') {
+    if (item.situation) lines.push(`情境：${item.situation}`);
+    if (item.task) lines.push(`任务：${item.task}`);
+    if (item.action) lines.push(`行动：${item.action}`);
+    if (item.result) lines.push(`成果：${item.result}`);
+    lines.push(`案例说明：${item.content}`);
+    if (item.highlight) lines.push(`可借鉴点：${item.highlight}`);
+  }
+
+  if (item.kind === 'tool') {
+    if (item.format) lines.push(`工具形式：${item.format}`);
+    if (item.toolContent) lines.push(`工具内容：${item.toolContent}`);
+    if (item.toolDesc) lines.push(`使用说明：${item.toolDesc}`);
+  }
+
+  if (item.tags.length > 0) {
+    lines.push(`标签：${item.tags.join(' / ')}`);
+  }
+
+  return lines.join('\n');
+}
+
 // 将 RefinementResult 转换为内部 KnowledgeItem 格式
 function buildFromRefinement(result: RefinementResult): KnowledgeItem[] {
   const items: KnowledgeItem[] = [];
 
   (result.core_knowledge ?? []).forEach(item => {
-    items.push({
+    const base: KnowledgeItem = {
       id: item.id,
+      kind: 'core',
       type: item.type || '核心知识',
       title: item.title,
       content: item.content,
       tags: item.tags ?? [],
+      methodSteps: item.method_steps ?? [],
+      keyPrinciples: item.key_principles ?? [],
+      applicableWhen: item.applicable_when,
       aiScores: null,
       aiReasons: null,
       aiStatus: null,
       aiSuggestion: '',
       validation: { rule1: true, rule2: true, rule3: true },
-      v1Content: item.content,
-      v2Content: item.content,
+      v1Content: '',
+      v2Content: '',
       modified: false,
       reExtracted: false,
-    });
+    };
+    const serialized = serializeKnowledgeItem(base);
+    items.push({ ...base, v1Content: serialized, v2Content: serialized });
   });
 
   (result.case_materials ?? []).forEach(item => {
-    items.push({
+    const base: KnowledgeItem = {
       id: item.id,
+      kind: 'case',
       type: '配套案例',
       title: item.title,
       content: item.content,
       tags: [item.source, item.highlight].filter(Boolean),
+      source: item.source,
+      highlight: item.highlight,
+      situation: item.situation,
+      task: item.task,
+      action: item.action,
+      result: item.result,
       aiScores: null,
       aiReasons: null,
       aiStatus: null,
       aiSuggestion: '',
       validation: { rule1: true, rule2: true, rule3: true },
-      v1Content: item.content,
-      v2Content: item.content,
+      v1Content: '',
+      v2Content: '',
       modified: false,
       reExtracted: false,
-    });
+    };
+    const serialized = serializeKnowledgeItem(base);
+    items.push({ ...base, v1Content: serialized, v2Content: serialized });
   });
 
   (result.practical_tools ?? []).forEach(item => {
-    items.push({
+    const base: KnowledgeItem = {
       id: item.id,
+      kind: 'tool',
       type: '实操工具',
       title: item.title,
       content: item.desc,
       tags: [item.format].filter(Boolean),
+      format: item.format,
+      toolContent: item.tool_content,
+      toolDesc: item.desc,
       aiScores: null,
       aiReasons: null,
       aiStatus: null,
       aiSuggestion: '',
       validation: { rule1: true, rule2: true, rule3: true },
-      v1Content: item.desc,
-      v2Content: item.desc,
+      v1Content: '',
+      v2Content: '',
       modified: false,
       reExtracted: false,
-    });
+    };
+    const serialized = serializeKnowledgeItem(base);
+    items.push({ ...base, v1Content: serialized, v2Content: serialized });
   });
 
   return items;
@@ -413,6 +494,95 @@ const DeleteConfirm = ({ item, onConfirm, onClose }: DeleteConfirmProps) => (
   </div>
 );
 
+function renderValidationItemBody(item: KnowledgeItem) {
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-gray-600 leading-relaxed">{item.content}</p>
+
+      {item.kind === 'core' && item.methodSteps && item.methodSteps.length > 0 && (
+        <div className="bg-blue-50/60 rounded-xl p-3 border border-blue-100">
+          <p className="text-[10px] font-bold text-blue-700 mb-1.5 flex items-center gap-1">
+            <i className="ri-list-ordered text-xs" />操作步骤
+          </p>
+          <ol className="space-y-1">
+            {item.methodSteps.map((step, si) => (
+              <li key={si} className="text-[11px] text-gray-700 leading-relaxed flex gap-1.5">
+                <span className="font-bold text-blue-500 flex-shrink-0">{si + 1}.</span>
+                <span>{step.replace(/^第[一二三四五六七]步[:：]?\s*/, '').replace(/^\d+\.\s*/, '')}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {item.kind === 'core' && item.keyPrinciples && item.keyPrinciples.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {item.keyPrinciples.map((p, pi) => (
+            <span key={pi} className="text-[10px] text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full">
+              <i className="ri-key-2-line mr-0.5" />{p}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {item.kind === 'case' && (item.situation || item.task || item.action || item.result) && (
+        <div className="space-y-1.5">
+          {item.situation && (
+            <div className="flex gap-2">
+              <span className="text-[9px] font-bold text-sky-600 bg-sky-100 px-1.5 py-0.5 rounded flex-shrink-0 h-fit mt-0.5">情境</span>
+              <p className="text-[11px] text-gray-600 leading-relaxed">{item.situation}</p>
+            </div>
+          )}
+          {item.task && (
+            <div className="flex gap-2">
+              <span className="text-[9px] font-bold text-indigo-600 bg-indigo-100 px-1.5 py-0.5 rounded flex-shrink-0 h-fit mt-0.5">任务</span>
+              <p className="text-[11px] text-gray-600 leading-relaxed">{item.task}</p>
+            </div>
+          )}
+          {item.action && (
+            <div className="flex gap-2">
+              <span className="text-[9px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded flex-shrink-0 h-fit mt-0.5">行动</span>
+              <p className="text-[11px] text-gray-600 leading-relaxed whitespace-pre-line">{item.action}</p>
+            </div>
+          )}
+          {item.result && (
+            <div className="flex gap-2">
+              <span className="text-[9px] font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded flex-shrink-0 h-fit mt-0.5">成果</span>
+              <p className="text-[11px] text-gray-600 leading-relaxed">{item.result}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {item.kind === 'case' && item.highlight && (
+        <div className="flex items-start gap-1.5 bg-amber-50 rounded-lg px-2.5 py-1.5 border border-amber-100">
+          <i className="ri-lightbulb-line text-amber-500 text-xs flex-shrink-0 mt-0.5" />
+          <span className="text-[10px] text-amber-700 font-medium leading-relaxed">{item.highlight}</span>
+        </div>
+      )}
+
+      {item.kind === 'tool' && item.toolContent && (
+        <div className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+          <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-line">{item.toolContent}</p>
+        </div>
+      )}
+
+      {item.kind === 'tool' && item.toolDesc && (
+        <p className="text-[10px] text-gray-400 leading-relaxed">{item.toolDesc}</p>
+      )}
+
+      {(item.modified || item.reExtracted) && item.v2Content !== item.v1Content && (
+        <div className="bg-emerald-50/50 rounded-xl p-3 border border-emerald-200">
+          <p className="text-[10px] font-bold text-emerald-700 mb-1.5 flex items-center gap-1">
+            <i className="ri-magic-line text-xs" />2.0 优化内容
+          </p>
+          <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-line">{item.v2Content}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── 主组件 ──────────────────────────────────────────────────────
 const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete }: ValidationClosureStepProps) => {
   const initialList = refinementResult ? buildFromRefinement(refinementResult) : [];
@@ -466,7 +636,7 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
 
   const startEdit = (item: KnowledgeItem) => { setEditingId(item.id); setEditContent(item.v2Content); };
   const saveEdit = (itemId: string) => {
-    setKnowledgeList(prev => prev.map(item => item.id === itemId ? { ...item, content: editContent, v2Content: editContent, modified: true } : item));
+    setKnowledgeList(prev => prev.map(item => item.id === itemId ? { ...item, v2Content: editContent, modified: true, reExtracted: false } : item));
     setEditingId(null);
   };
   const cancelEdit = () => { setEditingId(null); setEditContent(''); };
@@ -475,10 +645,13 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
   const handleReExtractConfirm = (newContent: string) => {
     if (!reExtractItem) return;
     setKnowledgeList(prev => prev.map(item =>
-      item.id === reExtractItem.id ? { ...item, content: newContent, v2Content: newContent, reExtracted: true, modified: false } : item
+      item.id === reExtractItem.id ? { ...item, v2Content: newContent, reExtracted: true, modified: false } : item
     ));
     setReExtractItem(null);
   };
+
+  const [downloading, setDownloading] = useState(false);
+  const [page, setPage] = useState(1);
 
   const finishExtraction = () => {
     setViewMode('success');
@@ -486,41 +659,18 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
   };
   const backToList = () => setViewMode('list');
 
-  const handleDownload = () => {
-    const passRate = calculatePassRate();
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const lines: string[] = [
-      '═══════════════════════════════════════════════════════════',
-      '              知识萃取成果包（2.0版本）',
-      `              生成日期：${dateStr}`,
-      `              审核通过率：${passRate}%`,
-      '═══════════════════════════════════════════════════════════',
-      '',
-      '【审核规则】',
-      ...validationRules.map(rule => `  · ${rule.title}：${rule.desc}`),
-      '',
-      '【萃取知识清单（2.0版本）】',
-    ];
-    knowledgeList.forEach((item, idx) => {
-      const itemRate = getItemPassRate(item);
-      lines.push('');
-      lines.push(`${idx + 1}. 【${item.type}】${item.title}  ${item.modified ? '（已编辑）' : item.reExtracted ? '（已AI优化）' : ''}`);
-      lines.push(`   2.0内容：${item.v2Content}`);
-      if (item.modified || item.reExtracted) lines.push(`   1.0原始：${item.v1Content}`);
-      if (item.tags.length > 0) lines.push(`   标签：${item.tags.join(' / ')}`);
-      lines.push(`   审核状态：${itemRate}% 通过`);
-    });
-    lines.push('', '═══════════════════════════════════════════════════════════');
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `知识萃取成果包_2.0_${dateStr}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await exportKnowledgeToWord({
+        knowledgeList,
+        passRate: calculatePassRate(),
+        modifiedCount: knowledgeList.filter(item => item.modified || item.reExtracted).length,
+      });
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const passRate = calculatePassRate();
@@ -533,7 +683,7 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
         <div className="bg-gradient-to-r from-blue-500 to-blue-700 rounded-2xl p-5 text-white [box-shadow:0_8px_24px_-4px_rgba(59,130,246,0.35)]">
           <div className="flex items-center gap-4">
             <div className="w-14 h-14 flex items-center justify-center bg-white/20 rounded-full flex-shrink-0">
-              <i className="ri-check-double-line text-white text-2xl" />
+              <CheckCircle2 className="w-7 h-7 text-white" />
             </div>
             <div className="flex-1">
               <h2 className="text-lg font-bold mb-1">萃取完成！</h2>
@@ -543,8 +693,15 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
                 优化 <strong className="text-white">{modifiedCount}</strong> 条
               </p>
             </div>
-            <button type="button" onClick={handleDownload} className="flex items-center gap-2 px-4 py-2 bg-white text-blue-600 text-sm font-semibold rounded-xl hover:bg-blue-50 transition-colors cursor-pointer whitespace-nowrap">
-              <i className="ri-download-line" />下载成果包
+            <button
+              type="button"
+              disabled={downloading}
+              onClick={() => void handleDownload()}
+              className="flex items-center gap-2 px-4 py-2 bg-white text-blue-600 text-sm font-semibold rounded-xl hover:bg-blue-50 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-60"
+            >
+              {downloading
+                ? <><i className="ri-loader-4-line animate-spin" />正在生成 Word…</>
+                : <><i className="ri-file-word-line" />导出 Word 成果包</>}
             </button>
           </div>
         </div>
@@ -577,7 +734,9 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
                           {item.modified && <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">已编辑</span>}
                           {item.reExtracted && <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">AI已优化</span>}
                         </div>
-                        <p className="text-xs text-gray-500 leading-relaxed">{item.v2Content}</p>
+                        <div className="mt-1">
+                          {renderValidationItemBody(item)}
+                        </div>
                         <div className="flex items-center gap-2 mt-2">
                           {item.tags.map(tag => <span key={tag} className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{tag}</span>)}
                           <span className={`ml-auto text-[10px] font-semibold ${allPass ? 'text-blue-600' : 'text-gray-400'}`}>{itemRate}% 通过</span>
@@ -594,23 +753,30 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
     );
   }
 
+  // ─── AI 评估等待页面 ────────────────────────────────────────
+  if (validating) {
+    return (
+      <div className="min-h-[520px] flex flex-col">
+        <GenerationProgressScreen
+          layout="panel"
+          title="正在生成评估结果"
+          subtitle={`智能引擎正在对 ${knowledgeList.length} 条知识进行三维度质量评分，请稍候`}
+          stepLabels={['解析课题信息', '评估知识准确性', '分析目标对齐', '生成质量报告']}
+        />
+      </div>
+    );
+  }
+
   // ─── 主列表页面 ──────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4 h-full">
-      {/* AI 评估状态横幅 */}
-      {validating && (
-        <div className="flex items-center gap-2.5 bg-blue-50 border border-blue-100 rounded-xl px-4 py-2.5">
-          <i className="ri-loader-4-line animate-spin text-blue-500 text-sm flex-shrink-0" />
-          <span className="text-xs text-blue-700 font-medium">AI 正在对 {knowledgeList.length} 条知识进行三维度质量评估...</span>
-        </div>
-      )}
       {validateError && (
         <div className="flex items-center gap-2.5 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5">
           <i className="ri-error-warning-line text-red-500 text-sm flex-shrink-0" />
           <span className="text-xs text-red-700">AI评估失败：{validateError}（已使用人工评审模式）</span>
         </div>
       )}
-      {validateMock && !validating && !validateError && (
+      {validateMock && !validateError && (
         <div className="flex items-center gap-2.5 bg-amber-50 border border-amber-100 rounded-xl px-4 py-2.5">
           <i className="ri-information-line text-amber-500 text-sm flex-shrink-0" />
           <span className="text-xs text-amber-700">【演示模式】未配置 KE_VALIDATION_API_KEY，当前显示演示评分。导入 ke-05 工作流并配置 Key 后可获取真实 AI 评估。</span>
@@ -662,7 +828,8 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
                 <p className="text-xs text-gray-400 mt-1">请先完成结构化提炼（Step 3）</p>
               </div>
             )}
-            {knowledgeList.map((item, idx) => {
+            {knowledgeList.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((item, i) => {
+              const idx = (page - 1) * PAGE_SIZE + i;
               const itemRate = getItemPassRate(item);
               const isEditing = editingId === item.id;
               const allPass = itemRate === 100;
@@ -684,7 +851,12 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
                     <span className="text-sm font-bold text-gray-800 flex-1 truncate">{item.title}</span>
                     {item.modified && <span className="text-[10px] text-sky-600 bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-full flex-shrink-0">已编辑</span>}
                     {item.reExtracted && <span className="text-[10px] text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-full flex-shrink-0">AI已优化</span>}
-                    {allPass && <span className="flex items-center gap-1 text-[10px] text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-full flex-shrink-0"><i className="ri-check-double-line text-[10px]" />全部通过</span>}
+                    {allPass && (
+                      <span className="flex items-center gap-1 text-[10px] text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                        <CheckCheck className="w-3 h-3" />
+                        全部通过
+                      </span>
+                    )}
                   </div>
 
                   <div className="px-4 pt-2.5 pb-3">
@@ -696,7 +868,7 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
                         </div>
                         <textarea value={editContent} onChange={e => setEditContent(e.target.value)}
                           className="w-full text-xs text-gray-700 border border-blue-300 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-blue-100 leading-relaxed"
-                          rows={3} autoFocus />
+                          rows={10} autoFocus />
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => saveEdit(item.id)} className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-[10px] font-semibold rounded-lg hover:bg-blue-700 transition-colors cursor-pointer whitespace-nowrap">
                             <i className="ri-check-line" />保存
@@ -704,9 +876,7 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
                           <button type="button" onClick={cancelEdit} className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-600 text-[10px] rounded-lg hover:bg-gray-200 transition-colors cursor-pointer whitespace-nowrap">取消</button>
                         </div>
                       </div>
-                    ) : (
-                      <p className="text-xs text-gray-500 leading-relaxed line-clamp-2">{item.v2Content}</p>
-                    )}
+                    ) : renderValidationItemBody(item)}
                   </div>
 
                   <div className={`mx-4 h-px ${allPass ? 'bg-blue-100' : 'bg-gray-100'}`} />
@@ -786,6 +956,15 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
               );
             })}
           </div>
+          {knowledgeList.length > PAGE_SIZE && (
+            <KePagination
+              total={knowledgeList.length}
+              pageSize={PAGE_SIZE}
+              current={page}
+              onChange={setPage}
+              className="border-t border-gray-100 bg-white/80 px-3 mt-2"
+            />
+          )}
         </div>
       </div>
 
@@ -796,7 +975,8 @@ const ValidationClosureStep = ({ sessionId, refinementResult, onPrev, onComplete
         </button>
         <button type="button" onClick={finishExtraction}
           className="flex items-center gap-2 px-6 py-2.5 text-sm font-bold rounded-xl transition-colors cursor-pointer whitespace-nowrap bg-gradient-to-r from-blue-500 to-blue-700 text-white hover:from-blue-600 hover:to-blue-800 [box-shadow:0_4px_12px_-2px_rgba(59,130,246,0.40)]">
-          <i className="ri-check-double-line" />完成萃取
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+          完成萃取
         </button>
       </div>
 
