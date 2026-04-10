@@ -1,24 +1,38 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import DashboardMainLayout from '../../dashboard/components/DashboardMainLayout';
 import {
-  mockUsers,
+  createUserApi,
+  deleteUserApi,
+  fetchUsers,
   roleOptions,
+  toggleUserStatusApi,
+  updateUserApi,
   type SystemUser,
   type UserRole,
   type UserStatus,
-} from '../../../mocks/users';
-
-let idSeq = mockUsers.length + 1;
+} from '../../../services/userApi';
+import { getAuthUser } from '../../../utils/auth';
 
 const inputBase =
   'w-full rounded-xl border border-slate-200/90 bg-white px-3.5 py-2.5 text-[15px] text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-4 focus:ring-blue-500/[0.12] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500';
 
 const labelCls = 'mb-2 block text-[13px] font-medium text-slate-700';
 
+function formatCreatedAt(s: string): string {
+  if (!s) return '—';
+  return s.includes('T') ? s.slice(0, 10) : s.slice(0, 10);
+}
+
 const UserManagementPage = () => {
-  const [users, setUsers] = useState<SystemUser[]>(() => [...mockUsers]);
+  const isAdmin = getAuthUser()?.role === '管理员';
+
+  const [users, setUsers] = useState<SystemUser[]>([]);
   const [keyword, setKeyword] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const [modal, setModal] = useState<'add' | 'edit' | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -28,7 +42,27 @@ const UserManagementPage = () => {
     role: '内训师' as UserRole,
     department: '',
     status: '启用' as UserStatus,
+    initialPassword: '',
+    newPassword: '',
   });
+
+  const loadUsers = useCallback(async () => {
+    setListError(null);
+    setLoading(true);
+    try {
+      const list = await fetchUsers();
+      setUsers(list);
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : '加载失败');
+      setUsers([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   const filtered = useMemo(() => {
     const k = keyword.trim().toLowerCase();
@@ -37,8 +71,8 @@ const UserManagementPage = () => {
       (u) =>
         u.name.toLowerCase().includes(k) ||
         u.account.toLowerCase().includes(k) ||
-        u.phone.includes(k) ||
-        u.department.toLowerCase().includes(k)
+        (u.phone || '').includes(k) ||
+        (u.department || '').toLowerCase().includes(k),
     );
   }, [users, keyword]);
 
@@ -51,6 +85,8 @@ const UserManagementPage = () => {
       role: '内训师',
       department: '',
       status: '启用',
+      initialPassword: '',
+      newPassword: '',
     });
     setModal('add');
   };
@@ -60,10 +96,12 @@ const UserManagementPage = () => {
     setForm({
       name: u.name,
       account: u.account,
-      phone: u.phone,
+      phone: u.phone || '',
       role: u.role,
-      department: u.department,
+      department: u.department || '',
       status: u.status,
+      initialPassword: '',
+      newPassword: '',
     });
     setModal('edit');
   };
@@ -73,53 +111,69 @@ const UserManagementPage = () => {
     setEditingId(null);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAdmin) return;
     if (!form.name.trim() || !form.account.trim()) return;
-
     if (modal === 'add') {
-      const id = String(idSeq++);
-      setUsers((prev) => [
-        {
-          id,
+      const pwd = form.initialPassword.trim();
+      if (pwd.length > 0 && pwd.length < 6) {
+        alert('初始密码至少 6 位，或留空使用系统默认');
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      if (modal === 'add') {
+        await createUserApi({
           name: form.name.trim(),
           account: form.account.trim(),
-          phone: form.phone.trim() || '—',
+          password: form.initialPassword.trim() || undefined,
+          phone: form.phone.trim() || '',
           role: form.role,
-          department: form.department.trim() || '—',
+          department: form.department.trim() || '',
           status: form.status,
-          createdAt: new Date().toISOString().slice(0, 10),
-        },
-        ...prev,
-      ]);
-    } else if (modal === 'edit' && editingId) {
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === editingId
-            ? {
-                ...u,
-                name: form.name.trim(),
-                account: form.account.trim(),
-                phone: form.phone.trim() || '—',
-                role: form.role,
-                department: form.department.trim() || '—',
-                status: form.status,
-              }
-            : u
-        )
-      );
+        });
+      } else if (modal === 'edit' && editingId) {
+        await updateUserApi(editingId, {
+          name: form.name.trim(),
+          phone: form.phone.trim() || '',
+          role: form.role,
+          department: form.department.trim() || '',
+          status: form.status,
+          ...(form.newPassword.trim().length >= 6 ? { password: form.newPassword.trim() } : {}),
+        });
+      }
+      await loadUsers();
+      closeModal();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setSaving(false);
     }
-    closeModal();
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
+    if (!isAdmin) return;
     if (!confirm('确定删除该用户？')) return;
-    setUsers((prev) => prev.filter((u) => u.id !== id));
+    try {
+      await deleteUserApi(id);
+      await loadUsers();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '删除失败');
+    }
   };
 
-  const toggleStatus = (u: SystemUser) => {
+  const toggleStatus = async (u: SystemUser) => {
+    if (!isAdmin) return;
     const next: UserStatus = u.status === '启用' ? '停用' : '启用';
-    setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, status: next } : x)));
+    try {
+      await toggleUserStatusApi(u.id, next);
+      await loadUsers();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '状态更新失败');
+    }
   };
 
   return (
@@ -137,17 +191,34 @@ const UserManagementPage = () => {
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">用户管理</h1>
-              <p className="mt-1.5 text-sm text-slate-500">维护平台账号、角色与启用状态</p>
+              <p className="mt-1.5 text-sm text-slate-500">维护平台账号、角色与启用状态（数据来自 PostgreSQL）</p>
             </div>
-            <button
-              type="button"
-              onClick={openAdd}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 px-5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition hover:from-blue-700 hover:to-blue-800 hover:shadow-blue-600/30"
-            >
-              <i className="ri-user-add-line text-lg" />
-              新建用户
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={openAdd}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 px-5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition hover:from-blue-700 hover:to-blue-800 hover:shadow-blue-600/30"
+              >
+                <i className="ri-user-add-line text-lg" />
+                新建用户
+              </button>
+            )}
           </div>
+
+          {!isAdmin && (
+            <div className="mb-5 rounded-xl border border-amber-200/80 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              当前为只读视图；新增、编辑、删除与状态变更需使用<strong className="mx-0.5">管理员</strong>账号登录。
+            </div>
+          )}
+
+          {listError && (
+            <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              {listError}
+              <button type="button" className="ml-3 underline" onClick={() => loadUsers()}>
+                重试
+              </button>
+            </div>
+          )}
 
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="relative max-w-lg flex-1">
@@ -158,6 +229,7 @@ const UserManagementPage = () => {
                 onChange={(e) => setKeyword(e.target.value)}
                 placeholder="搜索姓名、账号、手机、部门"
                 className={`${inputBase} h-11 pl-11`}
+                disabled={loading}
               />
             </div>
             <p className="text-sm text-slate-500">
@@ -181,63 +253,91 @@ const UserManagementPage = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filtered.map((u) => (
-                    <tr key={u.id} className="transition-colors hover:bg-slate-50/90">
-                      <td className="whitespace-nowrap px-5 py-3.5 font-medium text-slate-900">{u.name}</td>
-                      <td className="whitespace-nowrap px-5 py-3.5 text-slate-600">{u.account}</td>
-                      <td className="whitespace-nowrap px-5 py-3.5 text-slate-600">{u.phone}</td>
-                      <td className="whitespace-nowrap px-5 py-3.5">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                            u.role === '管理员'
-                              ? 'bg-violet-100 text-violet-800'
-                              : u.role === '内训师'
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {u.role}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3.5 text-slate-600">{u.department}</td>
-                      <td className="whitespace-nowrap px-5 py-3.5">
-                        <button
-                          type="button"
-                          onClick={() => toggleStatus(u)}
-                          className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
-                            u.status === '启用'
-                              ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/80 hover:bg-emerald-100'
-                              : 'bg-slate-100 text-slate-600 ring-1 ring-slate-200/80 hover:bg-slate-200'
-                          }`}
-                        >
-                          {u.status}
-                        </button>
-                      </td>
-                      <td className="whitespace-nowrap px-5 py-3.5 tabular-nums text-slate-500">{u.createdAt}</td>
-                      <td className="whitespace-nowrap px-5 py-3.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => openEdit(u)}
-                          className="mr-3 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-blue-600 transition hover:bg-blue-50"
-                        >
-                          <i className="ri-edit-line" />
-                          编辑
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(u.id)}
-                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-red-600 transition hover:bg-red-50"
-                        >
-                          <i className="ri-delete-bin-line" />
-                          删除
-                        </button>
+                  {loading ? (
+                    <tr>
+                      <td colSpan={8} className="px-5 py-16 text-center text-slate-500">
+                        加载中…
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    filtered.map((u) => (
+                      <tr key={u.id} className="transition-colors hover:bg-slate-50/90">
+                        <td className="whitespace-nowrap px-5 py-3.5 font-medium text-slate-900">{u.name}</td>
+                        <td className="whitespace-nowrap px-5 py-3.5 text-slate-600">{u.account}</td>
+                        <td className="whitespace-nowrap px-5 py-3.5 text-slate-600">{u.phone || '—'}</td>
+                        <td className="whitespace-nowrap px-5 py-3.5">
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                              u.role === '管理员'
+                                ? 'bg-violet-100 text-violet-800'
+                                : u.role === '内训师'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {u.role}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5 text-slate-600">{u.department || '—'}</td>
+                        <td className="whitespace-nowrap px-5 py-3.5">
+                          {isAdmin ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleStatus(u)}
+                              className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
+                                u.status === '启用'
+                                  ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/80 hover:bg-emerald-100'
+                                  : 'bg-slate-100 text-slate-600 ring-1 ring-slate-200/80 hover:bg-slate-200'
+                              }`}
+                            >
+                              {u.status}
+                            </button>
+                          ) : (
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                                u.status === '启用'
+                                  ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/80'
+                                  : 'bg-slate-100 text-slate-600 ring-1 ring-slate-200/80'
+                              }`}
+                            >
+                              {u.status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3.5 tabular-nums text-slate-500">
+                          {formatCreatedAt(u.createdAt)}
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3.5 text-right">
+                          {isAdmin ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openEdit(u)}
+                                className="mr-3 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-blue-600 transition hover:bg-blue-50"
+                              >
+                                <i className="ri-edit-line" />
+                                编辑
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(u.id)}
+                                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-red-600 transition hover:bg-red-50"
+                              >
+                                <i className="ri-delete-bin-line" />
+                                删除
+                              </button>
+                            </>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
-            {filtered.length === 0 && (
+            {!loading && filtered.length === 0 && (
               <div className="py-16 text-center">
                 <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
                   <i className="ri-user-search-line text-2xl" />
@@ -248,7 +348,7 @@ const UserManagementPage = () => {
           </div>
         </div>
 
-        {modal && (
+        {modal && isAdmin && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
             onClick={closeModal}
@@ -279,7 +379,7 @@ const UserManagementPage = () => {
                       {modal === 'add' ? '新建用户' : '编辑用户'}
                     </h2>
                     <p className="mt-1 text-sm text-blue-100/95">
-                      {modal === 'add' ? '填写基本信息并分配角色与权限' : '修改用户资料与账号状态'}
+                      {modal === 'add' ? '填写基本信息并分配角色与权限' : '修改用户资料；可选重置密码'}
                     </p>
                   </div>
                 </div>
@@ -299,6 +399,7 @@ const UserManagementPage = () => {
                         onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                         placeholder="真实姓名"
                         className={inputBase}
+                        disabled={saving}
                       />
                     </div>
                     <div className="sm:col-span-1">
@@ -307,7 +408,7 @@ const UserManagementPage = () => {
                       </label>
                       <input
                         required
-                        disabled={modal === 'edit'}
+                        disabled={modal === 'edit' || saving}
                         value={form.account}
                         onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))}
                         placeholder="英文或数字"
@@ -326,6 +427,7 @@ const UserManagementPage = () => {
                           onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
                           placeholder="选填"
                           className={`${inputBase} pl-10`}
+                          disabled={saving}
                         />
                       </div>
                     </div>
@@ -338,9 +440,40 @@ const UserManagementPage = () => {
                           onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
                           placeholder="选填"
                           className={`${inputBase} pl-10`}
+                          disabled={saving}
                         />
                       </div>
                     </div>
+                    {modal === 'add' && (
+                      <div className="sm:col-span-2">
+                        <label className={labelCls}>初始密码</label>
+                        <input
+                          type="password"
+                          value={form.initialPassword}
+                          onChange={(e) => setForm((f) => ({ ...f, initialPassword: e.target.value }))}
+                          placeholder="留空则使用系统默认 password123"
+                          autoComplete="new-password"
+                          className={inputBase}
+                          disabled={saving}
+                        />
+                        <p className="mt-1 text-xs text-slate-400">至少 6 位；留空与后端默认一致</p>
+                      </div>
+                    )}
+                    {modal === 'edit' && (
+                      <div className="sm:col-span-2">
+                        <label className={labelCls}>重置密码（可选）</label>
+                        <input
+                          type="password"
+                          value={form.newPassword}
+                          onChange={(e) => setForm((f) => ({ ...f, newPassword: e.target.value }))}
+                          placeholder="不修改请留空"
+                          autoComplete="new-password"
+                          className={inputBase}
+                          disabled={saving}
+                        />
+                        <p className="mt-1 text-xs text-slate-400">填写则更新为新密码（至少 6 位）</p>
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 sm:p-5">
@@ -355,6 +488,7 @@ const UserManagementPage = () => {
                             value={form.role}
                             onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as UserRole }))}
                             className={`${inputBase} cursor-pointer appearance-none pr-10`}
+                            disabled={saving}
                           >
                             {roleOptions.map((r) => (
                               <option key={r} value={r}>
@@ -372,6 +506,7 @@ const UserManagementPage = () => {
                             value={form.status}
                             onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as UserStatus }))}
                             className={`${inputBase} cursor-pointer appearance-none pr-10`}
+                            disabled={saving}
                           >
                             <option value="启用">启用</option>
                             <option value="停用">停用</option>
@@ -387,15 +522,17 @@ const UserManagementPage = () => {
                   <button
                     type="button"
                     onClick={closeModal}
-                    className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+                    disabled={saving}
+                    className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
                   >
                     取消
                   </button>
                   <button
                     type="submit"
-                    className="h-11 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 px-6 text-sm font-semibold text-white shadow-md shadow-blue-600/25 transition hover:from-blue-700 hover:to-blue-800"
+                    disabled={saving}
+                    className="h-11 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 px-6 text-sm font-semibold text-white shadow-md shadow-blue-600/25 transition hover:from-blue-700 hover:to-blue-800 disabled:opacity-60"
                   >
-                    保存
+                    {saving ? '保存中…' : '保存'}
                   </button>
                 </div>
               </form>

@@ -1,44 +1,15 @@
-import { useState } from 'react';
 import PasswordLoginForm from './PasswordLoginForm';
-import PhoneLoginForm from './PhoneLoginForm';
-
-type TabType = 'password' | 'phone';
 
 const HomeLoginPanel = () => {
-  const [activeTab, setActiveTab] = useState<TabType>('password');
-
   return (
     <div className="relative z-10 w-full max-w-[440px] lg:mx-0">
       <div className="rounded-3xl border border-white/[0.09] bg-[#0a1628]/80 p-8 shadow-[0_24px_80px_-12px_rgba(0,0,0,0.65)] backdrop-blur-2xl ring-1 ring-white/[0.05]">
         <div className="mb-8">
           <h2 className="text-xl font-bold text-white">登录工作台</h2>
-          <p className="mt-1.5 text-sm text-slate-400">使用企业账号进入智创制课</p>
+          <p className="mt-1.5 text-sm text-slate-400">使用企业账号与密码进入智创制课</p>
         </div>
 
-        <div className="mb-6 flex gap-1 rounded-xl bg-slate-950/70 p-1 ring-1 ring-white/[0.06]">
-          {(
-            [
-              { key: 'password' as const, label: '账号密码', icon: 'ri-user-smile-line' },
-              { key: 'phone' as const, label: '手机验证码', icon: 'ri-smartphone-line' },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2.5 text-xs font-semibold transition ${
-                activeTab === tab.key
-                  ? 'bg-gradient-to-b from-white/[0.12] to-white/[0.05] text-white shadow-md shadow-black/30'
-                  : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              <i className={`${tab.icon} text-sm opacity-80`} />
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {activeTab === 'password' ? <PasswordLoginForm /> : <PhoneLoginForm />}
+        <PasswordLoginForm />
 
         <div className="mt-8 flex items-center gap-3">
           <div className="h-px flex-1 bg-gradient-to-r from-transparent to-white/15" />

@@ -20,6 +20,7 @@ import { createTempAssetFilePath, extractTextFromFile, mergeMaterialLines, AUDIO
 import { downloadOssFileToLocal, getOssPrefix, isOssConfigured, putLocalFileToOss } from './lib/ossUpload.mjs';
 import { ensurePostgresSchema, getSessionStoreDriver, isPostgresConfigured } from './lib/db.mjs';
 import { createSessionRecord, listSessions, loadSession, saveSession } from './lib/store.mjs';
+import { listUsers, getUserById, createUser, updateUser, deleteUser, verifyPassword, signToken, verifyToken, seedDefaultAdmin } from './lib/userStore.mjs';
 
 const __dirname = _serverDir;
 const ROOT = _projectRoot;
@@ -487,6 +488,163 @@ app.use('/islide-api', async (req, res) => {
   }
 });
 
+// ── Auth middleware ──────────────────────────────────────────────────────────
+
+function authMiddleware(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: '未登录' });
+  }
+  try {
+    req.user = verifyToken(header.slice(7));
+    next();
+  } catch {
+    return res.status(401).json({ error: '登录已过期，请重新登录' });
+  }
+}
+
+function adminOnly(req, res, next) {
+  if (req.user?.role !== '管理员') {
+    return res.status(403).json({ error: '仅管理员可操作' });
+  }
+  next();
+}
+
+// ── Auth routes ─────────────────────────────────────────────────────────────
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { account, password } = req.body || {};
+    if (!account || !password) {
+      return res.status(400).json({ error: '请输入账号和密码' });
+    }
+    const user = await verifyPassword(account.trim(), password);
+    if (!user) {
+      return res.status(401).json({ error: '账号或密码错误' });
+    }
+    if (user.status === '停用') {
+      return res.status(403).json({ error: '账号已停用，请联系管理员' });
+    }
+    const token = signToken(user);
+    res.json({ token, user });
+  } catch (e) {
+    console.error('[auth/login]', e);
+    res.status(500).json({ error: '登录服务异常' });
+  }
+});
+
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await getUserById(req.user.id);
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    res.json(user);
+  } catch (e) {
+    console.error('[auth/me]', e);
+    res.status(500).json({ error: '获取用户信息失败' });
+  }
+});
+
+// ── User management routes (admin only) ─────────────────────────────────────
+
+app.get('/api/users', authMiddleware, async (req, res) => {
+  try {
+    const keyword = req.query.keyword || '';
+    const users = await listUsers({ keyword });
+    res.json(users);
+  } catch (e) {
+    console.error('[users/list]', e);
+    res.status(500).json({ error: '获取用户列表失败' });
+  }
+});
+
+app.post('/api/users', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { name, account, password, phone, role, department, status } = req.body || {};
+    if (!name?.trim() || !account?.trim()) {
+      return res.status(400).json({ error: '姓名和账号为必填项' });
+    }
+    const user = await createUser({
+      name: name.trim(),
+      account: account.trim(),
+      password: password || 'password123',
+      phone: phone?.trim() || '',
+      role: role || '内训师',
+      department: department?.trim() || '',
+      status: status || '启用',
+    });
+    res.json(user);
+  } catch (e) {
+    if (e.message === '账号已存在') {
+      return res.status(409).json({ error: e.message });
+    }
+    console.error('[users/create]', e);
+    res.status(500).json({ error: '创建用户失败' });
+  }
+});
+
+app.put('/api/users/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const user = await updateUser(req.params.id, req.body || {});
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    res.json(user);
+  } catch (e) {
+    console.error('[users/update]', e);
+    res.status(500).json({ error: '更新用户失败' });
+  }
+});
+
+app.delete('/api/users/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ error: '不能删除自己的账号' });
+    }
+    const ok = await deleteUser(req.params.id);
+    if (!ok) return res.status(404).json({ error: '用户不存在' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[users/delete]', e);
+    res.status(500).json({ error: '删除用户失败' });
+  }
+});
+
+app.patch('/api/users/:id/status', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    if (!status || !['启用', '停用'].includes(status)) {
+      return res.status(400).json({ error: '状态值无效' });
+    }
+    if (req.params.id === req.user.id && status === '停用') {
+      return res.status(400).json({ error: '不能停用自己的账号' });
+    }
+    const user = await updateUser(req.params.id, { status });
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    res.json(user);
+  } catch (e) {
+    console.error('[users/status]', e);
+    res.status(500).json({ error: '状态更新失败' });
+  }
+});
+
+app.put('/api/users/:id/password', authMiddleware, async (req, res) => {
+  try {
+    const { password } = req.body || {};
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: '密码长度不能少于6位' });
+    }
+    const isAdmin = req.user.role === '管理员';
+    const isSelf = req.params.id === req.user.id;
+    if (!isAdmin && !isSelf) {
+      return res.status(403).json({ error: '只能修改自己的密码' });
+    }
+    const user = await updateUser(req.params.id, { password });
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[users/password]', e);
+    res.status(500).json({ error: '密码重置失败' });
+  }
+});
+
 /** 生产/Devbox：构建前端后由本进程托管 out/ */
 const serveStatic = process.env.SERVE_STATIC === '1' || process.env.NODE_ENV === 'production';
 const outDir = path.join(ROOT, 'out');
@@ -500,9 +658,13 @@ if (serveStatic && fs.existsSync(outDir)) {
   console.warn('[ke-api] SERVE_STATIC 已开启但缺少 out/，请先执行 npm run build');
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  // eslint-disable-next-line no-console
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(
     `[ke-api] http://0.0.0.0:${PORT}  health: /api/health  storage: ${isOssConfigured() ? 'OSS' : 'local'}`
   );
+  try {
+    await seedDefaultAdmin();
+  } catch (e) {
+    console.warn('[users] 种子管理员初始化跳过:', e.message);
+  }
 });

@@ -112,7 +112,62 @@ export async function ensurePostgresSchema() {
         CREATE INDEX IF NOT EXISTS idx_ke_assets_session_id
         ON ke_assets (session_id)
       `);
+
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          account TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          phone TEXT NOT NULL DEFAULT '',
+          role TEXT NOT NULL DEFAULT '内训师',
+          department TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '启用',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_users_account
+        ON users (account)
+      `);
+
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_users_role
+        ON users (role)
+      `);
     })();
   }
   await initPromise;
+}
+
+/**
+ * 仅初始化 users 表（供 userStore 使用，不依赖 KE_STORAGE_DRIVER）。
+ */
+let usersInitPromise;
+export async function ensureUsersSchema() {
+  const db = getPool();
+  if (!db) return;
+  if (!usersInitPromise) {
+    usersInitPromise = (async () => {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          account TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          phone TEXT NOT NULL DEFAULT '',
+          role TEXT NOT NULL DEFAULT '内训师',
+          department TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '启用',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_users_account ON users (account)`);
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_users_role ON users (role)`);
+    })();
+  }
+  await usersInitPromise;
 }

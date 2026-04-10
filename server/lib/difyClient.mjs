@@ -17,6 +17,28 @@ function stripJsonFence(s) {
 }
 
 /**
+ * Dify 工作流若在「开始」节点增加必填变量 `llm_profile_json`（如 LLM 画像/模型配置），
+ * `/v1/workflows/run` 的 inputs 必须包含该字段，否则会 400: invalid_param。
+ * 默认传 JSON 字符串 `"{}"`；可用环境变量 `KE_LLM_PROFILE_JSON` 覆盖（须为合法 JSON 文本）。
+ * 若旧版工作流未定义该变量且接口报错，可设 `KE_OMIT_LLM_PROFILE_JSON=1` 不再合并此字段。
+ */
+function mergeWorkflowInputs(inputs) {
+  const base = inputs && typeof inputs === 'object' ? { ...inputs } : {};
+  if (process.env.KE_OMIT_LLM_PROFILE_JSON === '1') return base;
+  const raw = process.env.KE_LLM_PROFILE_JSON?.trim();
+  let llm_profile_json = '{}';
+  if (raw) {
+    try {
+      JSON.parse(raw);
+      llm_profile_json = raw;
+    } catch {
+      llm_profile_json = '{}';
+    }
+  }
+  return { ...base, llm_profile_json };
+}
+
+/**
  * 从文本中截取第一个平衡的 JSON 数组片段（避免贪婪正则匹配到错误 ]）
  */
 function extractFirstJsonArray(s) {
@@ -231,6 +253,18 @@ function parseFilterKnowledgeItems(rawOut) {
     /* ignore */
   }
 
+  // 5) 最终兜底：对整段文本做控制字符转义后重试
+  try {
+    const escaped = escapeControlCharsInJsonStrings(text);
+    const arrChunk = extractFirstJsonArray(escaped);
+    if (arrChunk) {
+      const parsed = JSON.parse(arrChunk);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    /* ignore */
+  }
+
   return null;
 }
 
@@ -257,7 +291,7 @@ export async function runKeAnchorWorkflow(inputs) {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        inputs,
+        inputs: mergeWorkflowInputs(inputs),
         response_mode: 'blocking',
         user,
       }),
@@ -334,7 +368,7 @@ export async function runKeFilterWorkflow(inputs) {
         'Content-Type': 'application/json',
       },
       signal: controller.signal,
-      body: JSON.stringify({ inputs, response_mode: 'blocking', user }),
+      body: JSON.stringify({ inputs: mergeWorkflowInputs(inputs), response_mode: 'blocking', user }),
     });
   } finally {
     clearTimeout(tid);
@@ -354,15 +388,26 @@ export async function runKeFilterWorkflow(inputs) {
 
   const outputs = normalizeWorkflowOutputs(data?.outputs);
   const rawOut =
-    outputs?.knowledge_items ?? outputs?.text ?? outputs?.result;
+    outputs?.knowledge_items ?? outputs?.output ?? outputs?.text ?? outputs?.result;
 
   let knowledge_items = parseFilterKnowledgeItems(rawOut);
+
+  if (!knowledge_items?.length) {
+    // 若首选 key 为空，遍历所有 outputs 值再尝试
+    if (rawOut == null) {
+      for (const v of Object.values(outputs)) {
+        const recovered = parseFilterKnowledgeItems(v);
+        if (recovered?.length) { knowledge_items = recovered; break; }
+      }
+    }
+  }
 
   if (!knowledge_items?.length) {
     const text =
       typeof rawOut === 'string'
         ? rawOut
-        : JSON.stringify(rawOut ?? {}).slice(0, 4000);
+        : JSON.stringify(rawOut ?? {}).slice(0, 100_000);
+    console.warn('[filter] parseFilterKnowledgeItems 解析失败，rawOut 前 500 字:', String(rawOut).slice(0, 500));
     knowledge_items = [
       {
         id: 'k_raw',
@@ -370,6 +415,7 @@ export async function runKeFilterWorkflow(inputs) {
         category: '解析提示',
         title: 'AI返回内容解析失败，请查看原始内容',
         content: text.slice(0, 800),
+        structured_body: text,
         source: 'Dify原始输出',
         priority: 'low',
         reusable: false,
@@ -438,7 +484,7 @@ export async function runKeRefineWorkflow(inputs) {
         'Content-Type': 'application/json',
       },
       signal: controller.signal,
-      body: JSON.stringify({ inputs, response_mode: 'blocking', user }),
+      body: JSON.stringify({ inputs: mergeWorkflowInputs(inputs), response_mode: 'blocking', user }),
     });
   } finally {
     clearTimeout(tid);
@@ -537,7 +583,7 @@ export async function runKeReextractWorkflow(inputs) {
         'Content-Type': 'application/json',
       },
       signal: controller.signal,
-      body: JSON.stringify({ inputs, response_mode: 'blocking', user }),
+      body: JSON.stringify({ inputs: mergeWorkflowInputs(inputs), response_mode: 'blocking', user }),
     });
   } finally {
     clearTimeout(tid);
@@ -592,7 +638,7 @@ export async function runKeAudioRefineWorkflow(inputs) {
         'Content-Type': 'application/json',
       },
       signal: controller.signal,
-      body: JSON.stringify({ inputs, response_mode: 'blocking', user }),
+      body: JSON.stringify({ inputs: mergeWorkflowInputs(inputs), response_mode: 'blocking', user }),
     });
   } finally {
     clearTimeout(tid);
@@ -642,7 +688,7 @@ export async function runKeValidationWorkflow(inputs) {
         'Content-Type': 'application/json',
       },
       signal: controller.signal,
-      body: JSON.stringify({ inputs, response_mode: 'blocking', user }),
+      body: JSON.stringify({ inputs: mergeWorkflowInputs(inputs), response_mode: 'blocking', user }),
     });
   } finally {
     clearTimeout(tid);

@@ -14,75 +14,82 @@ describe('difyClient.mjs - Dify Workflow Client', () => {
   describe('getV1Root (implicit via runKeAnchorWorkflow)', () => {
     it('should use default V1 root when DIFY_BASE_URL is not set', async () => {
       delete process.env.DIFY_BASE_URL;
-      delete process.env.KE_ANCHOR_API_KEY;
-      
+      delete process.env.KE_OMIT_LLM_PROFILE_JSON;
+      process.env.KE_ANCHOR_API_KEY = 'test-key';
+
       difyClient = await import('./difyClient.mjs');
-      
+
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
-        text: async () => JSON.stringify({ data: { status: 'completed', outputs: { anchor_package: '{}' } } })
+        text: async () => JSON.stringify({ data: { status: 'completed', outputs: { anchor_package: '{}' } } }),
       });
       global.fetch = mockFetch;
-      
+
       await difyClient.runKeAnchorWorkflow({ extract_goal: 'test' });
-      
+
       expect(mockFetch).toHaveBeenCalled();
       const callArgs = mockFetch.mock.calls[0];
       expect(callArgs[0]).toContain('http://127.0.0.1:8088/v1/workflows/run');
+      const body = JSON.parse(callArgs[1].body);
+      expect(body.inputs.llm_profile_json).toBe('{}');
+      delete process.env.KE_ANCHOR_API_KEY;
     });
 
     it('should append /v1 when DIFY_BASE_URL does not end with /v1', async () => {
       process.env.DIFY_BASE_URL = 'http://81.70.78.132:8088';
-      delete process.env.KE_ANCHOR_API_KEY;
-      
+      process.env.KE_ANCHOR_API_KEY = 'test-key';
+
       difyClient = await import('./difyClient.mjs');
-      
+
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
-        text: async () => JSON.stringify({ data: { status: 'completed', outputs: { anchor_package: '{}' } } })
+        text: async () => JSON.stringify({ data: { status: 'completed', outputs: { anchor_package: '{}' } } }),
       });
       global.fetch = mockFetch;
-      
+
       await difyClient.runKeAnchorWorkflow({ extract_goal: 'test' });
-      
+
       const callArgs = mockFetch.mock.calls[0];
       expect(callArgs[0]).toContain('8088/v1/workflows/run');
+      delete process.env.KE_ANCHOR_API_KEY;
     });
 
     it('should not double append /v1 when DIFY_BASE_URL already ends with /v1', async () => {
       process.env.DIFY_BASE_URL = 'http://81.70.78.132:8088/v1';
-      delete process.env.KE_ANCHOR_API_KEY;
-      
+      process.env.KE_ANCHOR_API_KEY = 'test-key';
+
       difyClient = await import('./difyClient.mjs');
-      
+
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
-        text: async () => JSON.stringify({ data: { status: 'completed', outputs: { anchor_package: '{}' } } })
+        text: async () => JSON.stringify({ data: { status: 'completed', outputs: { anchor_package: '{}' } } }),
       });
       global.fetch = mockFetch;
-      
+
       await difyClient.runKeAnchorWorkflow({ extract_goal: 'test' });
-      
+
       const callArgs = mockFetch.mock.calls[0];
       expect(callArgs[0]).toContain('8088/v1/workflows/run');
+      delete process.env.KE_ANCHOR_API_KEY;
     });
 
     it('should remove trailing slash from DIFY_BASE_URL', async () => {
       process.env.DIFY_BASE_URL = 'http://81.70.78.132:8088/v1/';
-      delete process.env.KE_ANCHOR_API_KEY;
-      
+      process.env.KE_ANCHOR_API_KEY = 'test-key';
+
       difyClient = await import('./difyClient.mjs');
-      
+
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
-        text: async () => JSON.stringify({ data: { status: 'completed', outputs: { anchor_package: '{}' } } })
+        text: async () => JSON.stringify({ data: { status: 'completed', outputs: { anchor_package: '{}' } } }),
       });
       global.fetch = mockFetch;
-      
+
       await difyClient.runKeAnchorWorkflow({ extract_goal: 'test' });
-      
+
       const callArgs = mockFetch.mock.calls[0];
       expect(callArgs[0]).toContain('8088/v1/workflows/run');
+      delete process.env.KE_ANCHOR_API_KEY;
     });
   });
 
@@ -159,6 +166,9 @@ describe('difyClient.mjs - Dify Workflow Client', () => {
           body: expect.stringContaining('"inputs":')
         })
       );
+      const sent = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(sent.inputs.llm_profile_json).toBe('{}');
+      expect(sent.inputs.extract_goal).toBe('测试目标');
     });
 
     it('should throw error on non-OK response', async () => {

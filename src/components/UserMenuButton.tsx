@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { getDisplayName, logout } from '../utils/auth';
+import { getDisplayName, getDisplayRole, logout } from '../utils/auth';
 
 type Props = {
   /** 默认：工作台顶栏圆角头像；compact：制课页小圆头像 */
@@ -28,6 +28,7 @@ const UserMenuButton = ({ variant = 'default' }: Props) => {
   };
 
   const name = getDisplayName();
+  const role = getDisplayRole();
   const initial = name.slice(0, 1);
 
   const btnClass =
@@ -48,7 +49,7 @@ const UserMenuButton = ({ variant = 'default' }: Props) => {
         >
           <div className="px-3 py-2.5 border-b border-gray-50">
             <p className="text-xs font-semibold text-gray-900 truncate">{name}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">已登录</p>
+            <p className="text-[10px] text-gray-500 mt-0.5 truncate">{role || '已登录'}</p>
           </div>
           <button
             type="button"
